@@ -126,6 +126,7 @@ jobs:
               '    <application',
               '        android:allowBackup="true"',
               '        android:icon="@mipmap/ic_launcher"',
+              '        android:roundIcon="@mipmap/ic_launcher_round"',
               '        android:label="@string/app_name"',
               '        android:theme="@style/Theme.HtmlEditor"',
               '        android:usesCleartextTraffic="true"',
@@ -148,26 +149,43 @@ jobs:
               f.write('\n'.join(manifest_lines) + '\n')
           print('Wrote clean Standalone AndroidManifest.xml with StandaloneAppActivity as main launcher')
 
-          # 6. Decode and resize custom icon
+          # 6. Decode and apply custom icon (removing adaptive vector icons that override PNGs on Android 8+)
           if icon_base64:
               try:
                   with open('custom_icon.png', 'wb') as f:
                       f.write(base64.b64decode(icon_base64))
-                  from PIL import Image
-                  im = Image.open('custom_icon.png')
-                  sizes = [
-                      (48, 'app/src/main/res/mipmap-mdpi/ic_launcher.png'),
-                      (72, 'app/src/main/res/mipmap-hdpi/ic_launcher.png'),
-                      (96, 'app/src/main/res/mipmap-xhdpi/ic_launcher.png'),
-                      (144, 'app/src/main/res/mipmap-xxhdpi/ic_launcher.png'),
-                      (192, 'app/src/main/res/mipmap-xxxhdpi/ic_launcher.png'),
+                  from PIL import Image, ImageDraw
+                  im = Image.open('custom_icon.png').convert('RGBA')
+
+                  import shutil
+                  shutil.rmtree('app/src/main/res/mipmap-anydpi-v26', ignore_errors=True)
+
+                  densities = [
+                      (48, 'mdpi'),
+                      (72, 'hdpi'),
+                      (96, 'xhdpi'),
+                      (144, 'xxhdpi'),
+                      (192, 'xxxhdpi'),
                   ]
-                  for s, path in sizes:
-                      os.makedirs(os.path.dirname(path), exist_ok=True)
-                      im.resize((s, s)).save(path)
-                  print('Resized custom icon successfully')
+                  for size, density in densities:
+                      folder = f'app/src/main/res/mipmap-{density}'
+                      os.makedirs(folder, exist_ok=True)
+
+                      # Standard square icon
+                      square_im = im.resize((size, size), Image.Resampling.LANCZOS)
+                      square_im.save(os.path.join(folder, 'ic_launcher.png'), 'PNG')
+
+                      # Round icon with circular mask for round-launcher devices
+                      mask = Image.new('L', (size, size), 0)
+                      draw = ImageDraw.Draw(mask)
+                      draw.ellipse((0, 0, size, size), fill=255)
+                      round_im = Image.new('RGBA', (size, size), (0, 0, 0, 0))
+                      round_im.paste(square_im, (0, 0), mask)
+                      round_im.save(os.path.join(folder, 'ic_launcher_round.png'), 'PNG')
+
+                  print('Custom launcher icons (square + round) created across all densities successfully!')
               except Exception as e:
-                  print('Could not resize icon:', e)
+                  print('Could not process custom icon:', e)
 
           # 7. Customize splash screen color
           layout_path = 'app/src/main/res/layout/activity_standalone_app.xml'
