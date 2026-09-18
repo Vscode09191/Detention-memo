@@ -37,7 +37,7 @@ jobs:
           import zipfile, os
           with zipfile.ZipFile('build_payload/template.zip', 'r') as z:
               for info in z.infolist():
-                  clean = info.filename.replace('\\', '/')
+                  clean = info.filename.replace(chr(92), '/')
                   if clean.endswith('/'):
                       os.makedirs(clean, exist_ok=True)
                   else:
