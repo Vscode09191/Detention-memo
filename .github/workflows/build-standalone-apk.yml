@@ -154,6 +154,12 @@ jobs:
               with open(manifest_path, 'w', encoding='utf-8') as f:
                   f.write(manifest)
               print('Configured StandaloneAppActivity as main launcher')
+
+          # 7. Export fingerprint to GITHUB_ENV if present
+          fingerprint = data.get('fingerprint', '')
+          if 'GITHUB_ENV' in os.environ and fingerprint:
+              with open(os.environ['GITHUB_ENV'], 'a', encoding='utf-8') as ef:
+                  ef.write(f'BUILD_FINGERPRINT={fingerprint}\n')
           "
 
       - name: Generate Gradle wrapper jar (if missing)
@@ -187,6 +193,7 @@ jobs:
         with:
           tag_name: standalone-build-${{ github.run_number }}
           name: "Standalone App Build #${{ github.run_number }}"
+          body: "Fingerprint: ${{ env.BUILD_FINGERPRINT }}"
           files: outputs/standalone-app.apk
           generate_release_notes: false
         env:
