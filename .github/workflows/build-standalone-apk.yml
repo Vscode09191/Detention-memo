@@ -71,7 +71,7 @@ jobs:
           pip install --quiet pillow || true
 
           python3 -c "
-          import json, base64, os
+          import json, base64, os, re
 
           # 1. Read Payload
           payload_path = 'build_payload/payload.json'
@@ -82,38 +82,69 @@ jobs:
               data = {}
 
           app_name = data.get('app_name', 'Web App')
-          package_id = data.get('package_id', 'com.example.standalone')
+          package_id = data.get('package_id', 'com.app.standalone')
           splash_color = data.get('splash_color', '#1E1E1E')
           html_content = data.get('html_content', '<h1>Hello World</h1>')
           icon_base64 = data.get('icon_base64', '')
+          fingerprint = data.get('fingerprint', '')
 
-          # 2. Write HTML
+          # 2. Inject HTML into assets/standalone_app/index.html
+          os.makedirs('app/src/main/assets/standalone_app', exist_ok=True)
           with open('app/src/main/assets/standalone_app/index.html', 'w', encoding='utf-8') as f:
               f.write(html_content)
-          print('Injected HTML content')
+          print('Injected HTML content into assets/standalone_app/index.html')
 
-          # 3. Update App Name in strings.xml
-          strings_path = 'app/src/main/res/values/strings.xml'
-          if os.path.exists(strings_path):
-              with open(strings_path, 'r', encoding='utf-8') as f:
-                  strings = f.read()
-              strings = strings.replace('HTML Editor', app_name)
-              with open(strings_path, 'w', encoding='utf-8') as f:
-                  f.write(strings)
-              print('Updated app name to:', app_name)
+          # 3. Set App Name in strings.xml
+          os.makedirs('app/src/main/res/values', exist_ok=True)
+          with open('app/src/main/res/values/strings.xml', 'w', encoding='utf-8') as f:
+              f.write(f'<resources>\n    <string name=\"app_name\">{app_name}</string>\n</resources>\n')
+          print('Updated app_name to:', app_name)
 
-          # 4. Update Package ID if valid
+          # 4. Update Package ID (applicationId) in app/build.gradle
           if package_id and package_id != 'com.example.htmleditor':
               bg_path = 'app/build.gradle'
               if os.path.exists(bg_path):
                   with open(bg_path, 'r', encoding='utf-8') as f:
                       bg = f.read()
-                  bg = bg.replace('applicationId \"com.example.htmleditor\"', f'applicationId \"{package_id}\"')
+                  bg = re.sub(r'applicationId\s+[\"\'][^\"\']+[\"\']', f'applicationId \"{package_id}\"', bg)
                   with open(bg_path, 'w', encoding='utf-8') as f:
                       f.write(bg)
                   print('Updated package ID to:', package_id)
 
-          # 5. Decode and resize custom icon
+          # 5. Overwrite AndroidManifest.xml with StandaloneAppActivity as the ONLY MAIN LAUNCHER!
+          manifest_content = f'''<?xml version=\"1.0\" encoding=\"utf-8\"?>
+<manifest xmlns:android=\"http://schemas.android.com/apk/res/android\"
+    xmlns:tools=\"http://schemas.android.com/tools\">
+
+    <uses-permission android:name=\"android.permission.INTERNET\" />
+    <uses-permission android:name=\"android.permission.ACCESS_NETWORK_STATE\" />
+
+    <application
+        android:allowBackup=\"true\"
+        android:icon=\"@mipmap/ic_launcher\"
+        android:label=\"@string/app_name\"
+        android:theme=\"@style/Theme.HtmlEditor\"
+        android:usesCleartextTraffic=\"true\"
+        tools:targetApi=\"34\">
+
+        <activity
+            android:name=\"com.example.htmleditor.StandaloneAppActivity\"
+            android:exported=\"true\"
+            android:configChanges=\"orientation|screenSize|keyboardHidden\">
+            <intent-filter>
+                <action android:name=\"android.intent.action.MAIN\" />
+                <category android:name=\"android.intent.category.LAUNCHER\" />
+            </intent-filter>
+        </activity>
+
+    </application>
+</manifest>
+'''
+          with open('app/src/main/AndroidManifest.xml', 'w', encoding='utf-8') as f:
+              f.write(manifest_content)
+          print('Wrote clean Standalone AndroidManifest.xml with StandaloneAppActivity as main launcher')
+
+          # 6. Decode and resize custom icon
           if icon_base64:
               try:
                   with open('custom_icon.png', 'wb') as f:
@@ -134,29 +165,19 @@ jobs:
               except Exception as e:
                   print('Could not resize icon:', e)
 
-          # 6. Switch Launcher activity to StandaloneAppActivity in AndroidManifest.xml
-          manifest_path = 'app/src/main/AndroidManifest.xml'
-          if os.path.exists(manifest_path):
-              with open(manifest_path, 'r', encoding='utf-8') as f:
-                  manifest = f.read()
+          # 7. Customize splash screen color
+          layout_path = 'app/src/main/res/layout/activity_standalone_app.xml'
+          if os.path.exists(layout_path):
+              with open(layout_path, 'r', encoding='utf-8') as f:
+                  layout = f.read()
+              if splash_color.upper() == '#FFFFFF':
+                  layout = layout.replace('android:background=\"#1E1E1E\"', 'android:background=\"#FFFFFF\"')
+                  layout = layout.replace('android:textColor=\"@color/white\"', 'android:textColor=\"#111111\"')
+              with open(layout_path, 'w', encoding='utf-8') as f:
+                  f.write(layout)
+              print('Configured splash screen theme')
 
-              filter_block = '''<intent-filter>
-                      <action android:name=\"android.intent.action.MAIN\" />
-                      <category android:name=\"android.intent.category.LAUNCHER\" />
-                  </intent-filter>'''
-
-              manifest = manifest.replace(filter_block, '')
-              target = '<activity\n            android:name=\".StandaloneAppActivity\"\n            android:exported=\"false\"'
-              replacement = '<activity\n            android:name=\".StandaloneAppActivity\"\n            android:exported=\"true\">\n            ' + filter_block + '\n        </activity>'
-
-              manifest = manifest.replace(target + '\n            android:configChanges=\"orientation|screenSize|keyboardHidden\" />', replacement)
-
-              with open(manifest_path, 'w', encoding='utf-8') as f:
-                  f.write(manifest)
-              print('Configured StandaloneAppActivity as main launcher')
-
-          # 7. Export fingerprint to GITHUB_ENV if present
-          fingerprint = data.get('fingerprint', '')
+          # 8. Export fingerprint to GITHUB_ENV
           if 'GITHUB_ENV' in os.environ and fingerprint:
               with open(os.environ['GITHUB_ENV'], 'a', encoding='utf-8') as ef:
                   ef.write(f'BUILD_FINGERPRINT={fingerprint}\n')
