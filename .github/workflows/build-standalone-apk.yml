@@ -63,14 +63,18 @@ jobs:
       - name: Configure Standalone App (Inject HTML, Icon, Name, Splash)
         run: |
           mkdir -p app/src/main/assets/standalone_app
+          pip install --quiet pillow || true
 
-          # Check if payload.json exists
-          if [ -f build_payload/payload.json ]; then
-            python3 -c "
+          python3 -c "
           import json, base64, os
 
-          with open('build_payload/payload.json', 'r', encoding='utf-8') as f:
-              data = json.load(f)
+          # 1. Read Payload
+          payload_path = 'build_payload/payload.json'
+          if os.path.exists(payload_path):
+              with open(payload_path, 'r', encoding='utf-8') as f:
+                  data = json.load(f)
+          else:
+              data = {}
 
           app_name = data.get('app_name', 'Web App')
           package_id = data.get('package_id', 'com.example.standalone')
@@ -78,11 +82,12 @@ jobs:
           html_content = data.get('html_content', '<h1>Hello World</h1>')
           icon_base64 = data.get('icon_base64', '')
 
-          # 1. Write HTML
+          # 2. Write HTML
           with open('app/src/main/assets/standalone_app/index.html', 'w', encoding='utf-8') as f:
               f.write(html_content)
+          print('Injected HTML content')
 
-          # 2. Update App Name in strings.xml
+          # 3. Update App Name in strings.xml
           strings_path = 'app/src/main/res/values/strings.xml'
           if os.path.exists(strings_path):
               with open(strings_path, 'r', encoding='utf-8') as f:
@@ -90,8 +95,9 @@ jobs:
               strings = strings.replace('HTML Editor', app_name)
               with open(strings_path, 'w', encoding='utf-8') as f:
                   f.write(strings)
+              print('Updated app name to:', app_name)
 
-          # 3. Update Package ID if valid
+          # 4. Update Package ID if valid
           if package_id and package_id != 'com.example.htmleditor':
               bg_path = 'app/build.gradle'
               if os.path.exists(bg_path):
@@ -100,28 +106,30 @@ jobs:
                   bg = bg.replace('applicationId \"com.example.htmleditor\"', f'applicationId \"{package_id}\"')
                   with open(bg_path, 'w', encoding='utf-8') as f:
                       f.write(bg)
+                  print('Updated package ID to:', package_id)
 
-          # 4. Decode App Icon
+          # 5. Decode and resize custom icon
           if icon_base64:
-              with open('custom_icon.png', 'wb') as f:
-                  f.write(base64.b64decode(icon_base64))
-              print('Decoded custom icon successfully')
-          "
-          else
-            echo "<h1>Default Web App</h1>" > app/src/main/assets/standalone_app/index.html
-          fi
+              try:
+                  with open('custom_icon.png', 'wb') as f:
+                      f.write(base64.b64decode(icon_base64))
+                  from PIL import Image
+                  im = Image.open('custom_icon.png')
+                  sizes = [
+                      (48, 'app/src/main/res/mipmap-mdpi/ic_launcher.png'),
+                      (72, 'app/src/main/res/mipmap-hdpi/ic_launcher.png'),
+                      (96, 'app/src/main/res/mipmap-xhdpi/ic_launcher.png'),
+                      (144, 'app/src/main/res/mipmap-xxhdpi/ic_launcher.png'),
+                      (192, 'app/src/main/res/mipmap-xxxhdpi/ic_launcher.png'),
+                  ]
+                  for s, path in sizes:
+                      os.makedirs(os.path.dirname(path), exist_ok=True)
+                      im.resize((s, s)).save(path)
+                  print('Resized custom icon successfully')
+              except Exception as e:
+                  print('Could not resize icon:', e)
 
-          # If custom icon was decoded, resize it to mipmap folders
-          if [ -f custom_icon.png ]; then
-            convert custom_icon.png -resize 48x48 app/src/main/res/mipmap-mdpi/ic_launcher.png || true
-            convert custom_icon.png -resize 72x72 app/src/main/res/mipmap-hdpi/ic_launcher.png || true
-            convert custom_icon.png -resize 96x96 app/src/main/res/mipmap-xhdpi/ic_launcher.png || true
-            convert custom_icon.png -resize 144x144 app/src/main/res/mipmap-xxhdpi/ic_launcher.png || true
-            convert custom_icon.png -resize 192x192 app/src/main/res/mipmap-xxxhdpi/ic_launcher.png || true
-          fi
-
-          # Switch Launcher activity to StandaloneAppActivity in AndroidManifest.xml
-          python3 -c "
+          # 6. Switch Launcher activity to StandaloneAppActivity in AndroidManifest.xml
           manifest_path = 'app/src/main/AndroidManifest.xml'
           if os.path.exists(manifest_path):
               with open(manifest_path, 'r', encoding='utf-8') as f:
@@ -140,6 +148,7 @@ jobs:
 
               with open(manifest_path, 'w', encoding='utf-8') as f:
                   f.write(manifest)
+              print('Configured StandaloneAppActivity as main launcher')
           "
 
       - name: Generate Gradle wrapper jar (if missing)
