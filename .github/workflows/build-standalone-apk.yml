@@ -19,10 +19,15 @@ on:
         required: false
         default: '#1E1E1E'
 
+permissions:
+  contents: write
+
 jobs:
   build:
     name: Compile Standalone Web APK
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
 
     steps:
       - name: Checkout repository
