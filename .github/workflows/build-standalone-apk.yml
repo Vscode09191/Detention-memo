@@ -70,8 +70,11 @@ jobs:
           mkdir -p app/src/main/assets/standalone_app
           pip install --quiet pillow || true
 
-          python3 -c "
-          import json, base64, os, re
+          python3 - << 'EOF'
+          import json
+          import base64
+          import os
+          import re
 
           # 1. Read Payload
           payload_path = 'build_payload/payload.json'
@@ -97,7 +100,7 @@ jobs:
           # 3. Set App Name in strings.xml
           os.makedirs('app/src/main/res/values', exist_ok=True)
           with open('app/src/main/res/values/strings.xml', 'w', encoding='utf-8') as f:
-              f.write(f'<resources>\n    <string name=\"app_name\">{app_name}</string>\n</resources>\n')
+              f.write(f'<resources>\n    <string name="app_name">{app_name}</string>\n</resources>\n')
           print('Updated app_name to:', app_name)
 
           # 4. Update Package ID (applicationId) in app/build.gradle
@@ -106,7 +109,7 @@ jobs:
               if os.path.exists(bg_path):
                   with open(bg_path, 'r', encoding='utf-8') as f:
                       bg = f.read()
-                  bg = re.sub(r'applicationId\s+[\"\'][^\"\']+[\"\']', f'applicationId \"{package_id}\"', bg)
+                  bg = re.sub(r'applicationId\s+["\'][^"\']+["\']', f'applicationId "{package_id}"', bg)
                   with open(bg_path, 'w', encoding='utf-8') as f:
                       f.write(bg)
                   print('Updated package ID to:', package_id)
@@ -142,7 +145,7 @@ jobs:
               '</manifest>'
           ]
           with open('app/src/main/AndroidManifest.xml', 'w', encoding='utf-8') as f:
-              f.write('\\n'.join(manifest_lines) + '\\n')
+              f.write('\n'.join(manifest_lines) + '\n')
           print('Wrote clean Standalone AndroidManifest.xml with StandaloneAppActivity as main launcher')
 
           # 6. Decode and resize custom icon
@@ -172,8 +175,8 @@ jobs:
               with open(layout_path, 'r', encoding='utf-8') as f:
                   layout = f.read()
               if splash_color.upper() == '#FFFFFF':
-                  layout = layout.replace('android:background=\"#1E1E1E\"', 'android:background=\"#FFFFFF\"')
-                  layout = layout.replace('android:textColor=\"@color/white\"', 'android:textColor=\"#111111\"')
+                  layout = layout.replace('android:background="#1E1E1E"', 'android:background="#FFFFFF"')
+                  layout = layout.replace('android:textColor="@color/white"', 'android:textColor="#111111"')
               with open(layout_path, 'w', encoding='utf-8') as f:
                   f.write(layout)
               print('Configured splash screen theme')
@@ -182,7 +185,7 @@ jobs:
           if 'GITHUB_ENV' in os.environ and fingerprint:
               with open(os.environ['GITHUB_ENV'], 'a', encoding='utf-8') as ef:
                   ef.write(f'BUILD_FINGERPRINT={fingerprint}\n')
-          "
+          EOF
 
       - name: Generate Gradle wrapper jar (if missing)
         run: |
