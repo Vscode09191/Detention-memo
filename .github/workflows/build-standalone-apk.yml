@@ -33,8 +33,21 @@ jobs:
           if [ ! -f app/build.gradle ]; then
             echo "Base project files not found in repo root. Checking for payload template..."
             if [ -f build_payload/template.zip ]; then
-              unzip -o build_payload/template.zip
-              echo "Unpacked project template from payload successfully"
+              python3 -c "
+          import zipfile, os
+          with zipfile.ZipFile('build_payload/template.zip', 'r') as z:
+              for info in z.infolist():
+                  clean = info.filename.replace('\\', '/')
+                  if clean.endswith('/'):
+                      os.makedirs(clean, exist_ok=True)
+                  else:
+                      dir_name = os.path.dirname(clean)
+                      if dir_name:
+                          os.makedirs(dir_name, exist_ok=True)
+                      with open(clean, 'wb') as f:
+                          f.write(z.read(info.filename))
+          print('Extracted template successfully!')
+          "
             fi
           fi
 
@@ -81,11 +94,12 @@ jobs:
           # 3. Update Package ID if valid
           if package_id and package_id != 'com.example.htmleditor':
               bg_path = 'app/build.gradle'
-              with open(bg_path, 'r', encoding='utf-8') as f:
-                  bg = f.read()
-              bg = bg.replace('applicationId \"com.example.htmleditor\"', f'applicationId \"{package_id}\"')
-              with open(bg_path, 'w', encoding='utf-8') as f:
-                  f.write(bg)
+              if os.path.exists(bg_path):
+                  with open(bg_path, 'r', encoding='utf-8') as f:
+                      bg = f.read()
+                  bg = bg.replace('applicationId \"com.example.htmleditor\"', f'applicationId \"{package_id}\"')
+                  with open(bg_path, 'w', encoding='utf-8') as f:
+                      f.write(bg)
 
           # 4. Decode App Icon
           if icon_base64:
@@ -108,23 +122,24 @@ jobs:
 
           # Switch Launcher activity to StandaloneAppActivity in AndroidManifest.xml
           python3 -c "
-          with open('app/src/main/AndroidManifest.xml', 'r', encoding='utf-8') as f:
-              manifest = f.read()
+          manifest_path = 'app/src/main/AndroidManifest.xml'
+          if os.path.exists(manifest_path):
+              with open(manifest_path, 'r', encoding='utf-8') as f:
+                  manifest = f.read()
 
-          # Swap MAIN/LAUNCHER intent-filter to StandaloneAppActivity
-          filter_block = '''<intent-filter>
-                  <action android:name=\"android.intent.action.MAIN\" />
-                  <category android:name=\"android.intent.category.LAUNCHER\" />
-              </intent-filter>'''
+              filter_block = '''<intent-filter>
+                      <action android:name=\"android.intent.action.MAIN\" />
+                      <category android:name=\"android.intent.category.LAUNCHER\" />
+                  </intent-filter>'''
 
-          manifest = manifest.replace(filter_block, '')
-          target = '<activity\n            android:name=\".StandaloneAppActivity\"\n            android:exported=\"false\"'
-          replacement = '<activity\n            android:name=\".StandaloneAppActivity\"\n            android:exported=\"true\">\n            ' + filter_block + '\n        </activity>'
+              manifest = manifest.replace(filter_block, '')
+              target = '<activity\n            android:name=\".StandaloneAppActivity\"\n            android:exported=\"false\"'
+              replacement = '<activity\n            android:name=\".StandaloneAppActivity\"\n            android:exported=\"true\">\n            ' + filter_block + '\n        </activity>'
 
-          manifest = manifest.replace(target + '\n            android:configChanges=\"orientation|screenSize|keyboardHidden\" />', replacement)
+              manifest = manifest.replace(target + '\n            android:configChanges=\"orientation|screenSize|keyboardHidden\" />', replacement)
 
-          with open('app/src/main/AndroidManifest.xml', 'w', encoding='utf-8') as f:
-              f.write(manifest)
+              with open(manifest_path, 'w', encoding='utf-8') as f:
+                  f.write(manifest)
           "
 
       - name: Generate Gradle wrapper jar (if missing)
