@@ -157,15 +157,15 @@ jobs:
                       bg = bg.replace('buildFeatures {', "composeOptions {\n        kotlinCompilerExtensionVersion '1.5.14'\n    }\n    buildFeatures {")
 
                   # Add Jetpack Compose dependencies
-                  compose_deps = """
-    // Jetpack Compose dependencies
-    implementation 'androidx.activity:activity-compose:1.9.0'
-    implementation platform('androidx.compose:compose-bom:2024.04.01')
-    implementation 'androidx.compose.ui:ui'
-    implementation 'androidx.compose.ui:ui-graphics'
-    implementation 'androidx.compose.ui:ui-tooling-preview'
-    implementation 'androidx.compose.material3:material3'
-"""
+                  compose_deps = (
+                      "\n    // Jetpack Compose dependencies\n"
+                      "    implementation 'androidx.activity:activity-compose:1.9.0'\n"
+                      "    implementation platform('androidx.compose:compose-bom:2024.04.01')\n"
+                      "    implementation 'androidx.compose.ui:ui'\n"
+                      "    implementation 'androidx.compose.ui:ui-graphics'\n"
+                      "    implementation 'androidx.compose.ui:ui-tooling-preview'\n"
+                      "    implementation 'androidx.compose.material3:material3'\n"
+                  )
                   if 'androidx.compose' not in bg:
                       bg = bg.replace('dependencies {', 'dependencies {' + compose_deps)
 
