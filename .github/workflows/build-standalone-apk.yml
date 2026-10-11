@@ -92,6 +92,7 @@ jobs:
           fingerprint = data.get('fingerprint', '')
           project_zip_b64 = data.get('project_zip_base64', '')
           permissions_list = data.get('permissions', ['INTERNET'])
+          project_type = data.get('project_type', 'html')
 
           # 2. Extract Project Assets or HTML into assets/standalone_app/
           os.makedirs('app/src/main/assets/standalone_app', exist_ok=True)
@@ -111,6 +112,25 @@ jobs:
                   f.write(html_content)
               print('Injected HTML content into assets/standalone_app/index.html')
 
+          # 2b. If Jetpack Compose project, inject custom MainActivity.kt into source set
+          is_compose = (project_type == 'compose')
+          if is_compose:
+              compose_src = None
+              for root, dirs, files in os.walk('app/src/main/assets/standalone_app'):
+                  for f in files:
+                      if f.endswith('.kt'):
+                          compose_src = os.path.join(root, f)
+                          break
+              if compose_src and os.path.exists(compose_src):
+                  target_main = 'app/src/main/java/com/example/htmleditor/MainActivity.kt'
+                  with open(compose_src, 'r', encoding='utf-8') as f:
+                      code = f.read()
+                  code = re.sub(r'package\s+[\w\.]+', 'package com.example.htmleditor', code, count=1)
+                  os.makedirs(os.path.dirname(target_main), exist_ok=True)
+                  with open(target_main, 'w', encoding='utf-8') as f:
+                      f.write(code)
+                  print('Injected Native Jetpack Compose MainActivity.kt!')
+
           # 3. Set App Name in strings.xml
           os.makedirs('app/src/main/res/values', exist_ok=True)
           with open('app/src/main/res/values/strings.xml', 'w', encoding='utf-8') as f:
@@ -128,7 +148,7 @@ jobs:
                       f.write(bg)
                   print('Updated package ID to:', package_id)
 
-          # 5. Overwrite AndroidManifest.xml with dynamic permissions and StandaloneAppActivity
+          # 5. Overwrite AndroidManifest.xml with dynamic permissions and appropriate Activity
           if not permissions_list:
               permissions_list = ['INTERNET']
 
@@ -158,8 +178,9 @@ jobs:
               perm_lines.append('    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="32" />')
               perm_lines.append('    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" android:maxSdkVersion="29" />')
               perm_lines.append('    <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />')
-              perm_lines.append('    <uses-permission android:name="android.permission.READ_MEDIA_VIDEO" />')
               perm_lines.append('    <uses-permission android:name="android.permission.READ_MEDIA_AUDIO" />')
+
+          launcher_activity = "com.example.htmleditor.MainActivity" if is_compose else "com.example.htmleditor.StandaloneAppActivity"
 
           manifest_lines = [
               '<?xml version="1.0" encoding="utf-8"?>',
@@ -177,15 +198,15 @@ jobs:
               '        android:usesCleartextTraffic="true"',
               '        tools:targetApi="34">',
               '',
-              '        <activity',
-              '            android:name="com.example.htmleditor.StandaloneAppActivity"',
-              '            android:exported="true"',
-              '            android:configChanges="orientation|screenSize|keyboardHidden">',
-              '            <intent-filter>',
-              '                <action android:name="android.intent.action.MAIN" />',
-              '                <category android:name="android.intent.category.LAUNCHER" />',
-              '            </intent-filter>',
-              '        </activity>',
+              f'        <activity',
+              f'            android:name="{launcher_activity}"',
+              f'            android:exported="true"',
+              f'            android:configChanges="orientation|screenSize|keyboardHidden">',
+              f'            <intent-filter>',
+              f'                <action android:name="android.intent.action.MAIN" />',
+              f'                <category android:name="android.intent.category.LAUNCHER" />',
+              f'            </intent-filter>',
+              f'        </activity>',
               '',
               '    </application>',
               '</manifest>'
