@@ -90,12 +90,26 @@ jobs:
           html_content = data.get('html_content', '<h1>Hello World</h1>')
           icon_base64 = data.get('icon_base64', '')
           fingerprint = data.get('fingerprint', '')
+          project_zip_b64 = data.get('project_zip_base64', '')
+          permissions_list = data.get('permissions', ['INTERNET'])
 
-          # 2. Inject HTML into assets/standalone_app/index.html
+          # 2. Extract Project Assets or HTML into assets/standalone_app/
           os.makedirs('app/src/main/assets/standalone_app', exist_ok=True)
-          with open('app/src/main/assets/standalone_app/index.html', 'w', encoding='utf-8') as f:
-              f.write(html_content)
-          print('Injected HTML content into assets/standalone_app/index.html')
+          if project_zip_b64:
+              import io, zipfile
+              try:
+                  zip_bytes = base64.b64decode(project_zip_b64)
+                  with zipfile.ZipFile(io.BytesIO(zip_bytes)) as z:
+                      z.extractall('app/src/main/assets/standalone_app')
+                  print('Successfully unpacked entire project files into assets/standalone_app!')
+              except Exception as e:
+                  print('Error extracting project ZIP:', e)
+                  with open('app/src/main/assets/standalone_app/index.html', 'w', encoding='utf-8') as f:
+                      f.write(html_content)
+          else:
+              with open('app/src/main/assets/standalone_app/index.html', 'w', encoding='utf-8') as f:
+                  f.write(html_content)
+              print('Injected HTML content into assets/standalone_app/index.html')
 
           # 3. Set App Name in strings.xml
           os.makedirs('app/src/main/res/values', exist_ok=True)
@@ -114,14 +128,45 @@ jobs:
                       f.write(bg)
                   print('Updated package ID to:', package_id)
 
-          # 5. Overwrite AndroidManifest.xml with StandaloneAppActivity as the ONLY MAIN LAUNCHER!
+          # 5. Overwrite AndroidManifest.xml with dynamic permissions and StandaloneAppActivity
+          if not permissions_list:
+              permissions_list = ['INTERNET']
+
+          perm_lines = []
+          feat_lines = []
+
+          if 'INTERNET' in permissions_list:
+              perm_lines.append('    <uses-permission android:name="android.permission.INTERNET" />')
+              perm_lines.append('    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />')
+
+          if 'LOCATION' in permissions_list:
+              perm_lines.append('    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />')
+              perm_lines.append('    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />')
+              feat_lines.append('    <uses-feature android:name="android.hardware.location.gps" android:required="false" />')
+
+          if 'CAMERA' in permissions_list:
+              perm_lines.append('    <uses-permission android:name="android.permission.CAMERA" />')
+              feat_lines.append('    <uses-feature android:name="android.hardware.camera" android:required="false" />')
+              feat_lines.append('    <uses-feature android:name="android.hardware.camera.autofocus" android:required="false" />')
+
+          if 'AUDIO' in permissions_list:
+              perm_lines.append('    <uses-permission android:name="android.permission.RECORD_AUDIO" />')
+              perm_lines.append('    <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />')
+              feat_lines.append('    <uses-feature android:name="android.hardware.microphone" android:required="false" />')
+
+          if 'STORAGE' in permissions_list:
+              perm_lines.append('    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="32" />')
+              perm_lines.append('    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" android:maxSdkVersion="29" />')
+              perm_lines.append('    <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />')
+              perm_lines.append('    <uses-permission android:name="android.permission.READ_MEDIA_VIDEO" />')
+              perm_lines.append('    <uses-permission android:name="android.permission.READ_MEDIA_AUDIO" />')
+
           manifest_lines = [
               '<?xml version="1.0" encoding="utf-8"?>',
               '<manifest xmlns:android="http://schemas.android.com/apk/res/android"',
               '    xmlns:tools="http://schemas.android.com/tools">',
-              '',
-              '    <uses-permission android:name="android.permission.INTERNET" />',
-              '    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />',
+              ''
+          ] + perm_lines + [''] + feat_lines + [
               '',
               '    <application',
               '        android:allowBackup="true"',
@@ -147,7 +192,7 @@ jobs:
           ]
           with open('app/src/main/AndroidManifest.xml', 'w', encoding='utf-8') as f:
               f.write('\n'.join(manifest_lines) + '\n')
-          print('Wrote clean Standalone AndroidManifest.xml with StandaloneAppActivity as main launcher')
+          print('Wrote clean Standalone AndroidManifest.xml with selected permissions:', permissions_list)
 
           # 6. Decode and apply custom icon (removing adaptive vector icons that override PNGs on Android 8+)
           if icon_base64:
