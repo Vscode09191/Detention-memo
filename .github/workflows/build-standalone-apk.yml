@@ -112,24 +112,21 @@ jobs:
                   f.write(html_content)
               print('Injected HTML content into assets/standalone_app/index.html')
 
-          # 2b. If Jetpack Compose project, inject custom MainActivity.kt into source set
+          # 2b. If Jetpack Compose project, inject custom Kotlin files into source set
           is_compose = (project_type == 'compose')
           if is_compose:
-              compose_src = None
               for root, dirs, files in os.walk('app/src/main/assets/standalone_app'):
                   for f in files:
                       if f.endswith('.kt'):
-                          compose_src = os.path.join(root, f)
-                          break
-              if compose_src and os.path.exists(compose_src):
-                  target_main = 'app/src/main/java/com/example/htmleditor/MainActivity.kt'
-                  with open(compose_src, 'r', encoding='utf-8') as f:
-                      code = f.read()
-                  code = re.sub(r'package\s+[\w\.]+', 'package com.example.htmleditor', code, count=1)
-                  os.makedirs(os.path.dirname(target_main), exist_ok=True)
-                  with open(target_main, 'w', encoding='utf-8') as f:
-                      f.write(code)
-                  print('Injected Native Jetpack Compose MainActivity.kt!')
+                          src_file = os.path.join(root, f)
+                          target_file = os.path.join('app/src/main/java/com/example/htmleditor', f)
+                          with open(src_file, 'r', encoding='utf-8') as kf:
+                              code = kf.read()
+                          code = re.sub(r'package\s+[\w\.]+', 'package com.example.htmleditor', code, count=1)
+                          os.makedirs(os.path.dirname(target_file), exist_ok=True)
+                          with open(target_file, 'w', encoding='utf-8') as kf:
+                              kf.write(code)
+                          print(f'Injected Compose source file: {f}')
 
           # 3. Set App Name in strings.xml
           os.makedirs('app/src/main/res/values', exist_ok=True)
@@ -137,16 +134,44 @@ jobs:
               f.write(f'<resources>\n    <string name="app_name">{app_name}</string>\n</resources>\n')
           print('Updated app_name to:', app_name)
 
-          # 4. Update Package ID (applicationId) in app/build.gradle
-          if package_id and package_id != 'com.example.htmleditor':
-              bg_path = 'app/build.gradle'
-              if os.path.exists(bg_path):
-                  with open(bg_path, 'r', encoding='utf-8') as f:
-                      bg = f.read()
+          # 4. Update Package ID (applicationId) & Jetpack Compose Configuration in app/build.gradle
+          bg_path = 'app/build.gradle'
+          if os.path.exists(bg_path):
+              with open(bg_path, 'r', encoding='utf-8') as f:
+                  bg = f.read()
+
+              if package_id and package_id != 'com.example.htmleditor':
                   bg = re.sub(r'applicationId\s+["\'][^"\']+["\']', f'applicationId "{package_id}"', bg)
-                  with open(bg_path, 'w', encoding='utf-8') as f:
-                      f.write(bg)
                   print('Updated package ID to:', package_id)
+
+              if is_compose:
+                  # Enable compose buildFeature
+                  if 'compose true' not in bg:
+                      if 'buildFeatures {' in bg:
+                          bg = bg.replace('buildFeatures {', 'buildFeatures {\n        compose true')
+                      else:
+                          bg = bg.replace('android {', 'android {\n    buildFeatures {\n        compose true\n    }')
+
+                  # Add composeOptions
+                  if 'composeOptions' not in bg:
+                      bg = bg.replace('buildFeatures {', "composeOptions {\n        kotlinCompilerExtensionVersion '1.5.14'\n    }\n    buildFeatures {")
+
+                  # Add Jetpack Compose dependencies
+                  compose_deps = """
+    // Jetpack Compose dependencies
+    implementation 'androidx.activity:activity-compose:1.9.0'
+    implementation platform('androidx.compose:compose-bom:2024.04.01')
+    implementation 'androidx.compose.ui:ui'
+    implementation 'androidx.compose.ui:ui-graphics'
+    implementation 'androidx.compose.ui:ui-tooling-preview'
+    implementation 'androidx.compose.material3:material3'
+"""
+                  if 'androidx.compose' not in bg:
+                      bg = bg.replace('dependencies {', 'dependencies {' + compose_deps)
+
+              with open(bg_path, 'w', encoding='utf-8') as f:
+                  f.write(bg)
+              print('Configured app/build.gradle (is_compose:', is_compose, ')')
 
           # 5. Overwrite AndroidManifest.xml with dynamic permissions and appropriate Activity
           if not permissions_list:
