@@ -123,6 +123,7 @@ jobs:
                           with open(src_file, 'r', encoding='utf-8') as kf:
                               code = kf.read()
                           code = re.sub(r'package\s+[\w\.]+', 'package com.example.htmleditor', code, count=1)
+                          code = code.replace('horizontalAlignment = Alignment.CenterVertically', 'horizontalAlignment = Alignment.CenterHorizontally')
                           os.makedirs(os.path.dirname(target_file), exist_ok=True)
                           with open(target_file, 'w', encoding='utf-8') as kf:
                               kf.write(code)
