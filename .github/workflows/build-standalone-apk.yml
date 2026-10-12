@@ -112,22 +112,63 @@ jobs:
                   f.write(html_content)
               print('Injected HTML content into assets/standalone_app/index.html')
 
-          # 2b. If Jetpack Compose project, inject custom Kotlin files into source set
+          # 2b. If Jetpack Compose project, inject custom Kotlin files and resource files into source set
           is_compose = (project_type == 'compose')
           if is_compose:
               for root, dirs, files in os.walk('app/src/main/assets/standalone_app'):
                   for f in files:
                       if f.endswith('.kt'):
                           src_file = os.path.join(root, f)
-                          target_file = os.path.join('app/src/main/java/com/example/htmleditor', f)
+                          rel = os.path.relpath(src_file, 'app/src/main/assets/standalone_app')
+                          if rel.startswith('src' + os.sep) or rel.startswith('src/'):
+                              rel = rel[4:]
+                          target_file = os.path.join('app/src/main/java/com/example/htmleditor', rel)
                           with open(src_file, 'r', encoding='utf-8') as kf:
                               code = kf.read()
                           code = re.sub(r'package\s+[\w\.]+', 'package com.example.htmleditor', code, count=1)
                           code = code.replace('horizontalAlignment = Alignment.CenterVertically', 'horizontalAlignment = Alignment.CenterHorizontally')
+
+                          # Auto-fix missing imports for Compose
+                          required_imports = [
+                              "import androidx.activity.ComponentActivity",
+                              "import androidx.activity.compose.setContent",
+                              "import androidx.compose.foundation.layout.*",
+                              "import androidx.compose.material.icons.Icons",
+                              "import androidx.compose.material.icons.filled.*",
+                              "import androidx.compose.material3.*",
+                              "import androidx.compose.runtime.*",
+                              "import androidx.compose.ui.Alignment",
+                              "import androidx.compose.ui.Modifier",
+                              "import androidx.compose.ui.graphics.Color",
+                              "import androidx.compose.ui.unit.dp",
+                              "import androidx.compose.ui.unit.sp",
+                              "import androidx.lifecycle.ViewModel",
+                              "import androidx.lifecycle.viewModelScope",
+                              "import androidx.lifecycle.viewmodel.compose.viewModel",
+                              "import kotlinx.coroutines.launch",
+                              "import kotlinx.coroutines.delay"
+                          ]
+                          missing_imports = [imp for imp in required_imports if imp not in code]
+                          if missing_imports:
+                              code = code.replace('package com.example.htmleditor', 'package com.example.htmleditor\n\n' + '\n'.join(missing_imports), 1)
+
                           os.makedirs(os.path.dirname(target_file), exist_ok=True)
                           with open(target_file, 'w', encoding='utf-8') as kf:
                               kf.write(code)
-                          print(f'Injected Compose source file: {f}')
+                          print(f'Injected Compose source file: {rel}')
+
+              # Copy any custom res/values XMLs from project
+              for root, dirs, files in os.walk('app/src/main/assets/standalone_app'):
+                  for f in files:
+                      if f.endswith('.xml') and f.lower() != 'androidmanifest.xml':
+                          src_file = os.path.join(root, f)
+                          target_file = os.path.join('app/src/main/res/values', f)
+                          os.makedirs(os.path.dirname(target_file), exist_ok=True)
+                          with open(src_file, 'r', encoding='utf-8') as sxf:
+                              content = sxf.read()
+                          with open(target_file, 'w', encoding='utf-8') as txf:
+                              txf.write(content)
+                          print(f'Injected Resource XML: {f}')
 
           # 3. Set App Name in strings.xml
           os.makedirs('app/src/main/res/values', exist_ok=True)
@@ -157,89 +198,116 @@ jobs:
                   if 'composeOptions' not in bg:
                       bg = bg.replace('buildFeatures {', "composeOptions {\n        kotlinCompilerExtensionVersion '1.5.14'\n    }\n    buildFeatures {")
 
-                  # Add Jetpack Compose dependencies
-                  compose_deps = (
-                      "\n    // Jetpack Compose dependencies\n"
-                      "    implementation 'androidx.activity:activity-compose:1.9.0'\n"
-                      "    implementation platform('androidx.compose:compose-bom:2024.04.01')\n"
-                      "    implementation 'androidx.compose.ui:ui'\n"
-                      "    implementation 'androidx.compose.ui:ui-graphics'\n"
-                      "    implementation 'androidx.compose.ui:ui-tooling-preview'\n"
-                      "    implementation 'androidx.compose.material3:material3'\n"
-                  )
-                  if 'androidx.compose' not in bg:
-                      bg = bg.replace('dependencies {', 'dependencies {' + compose_deps)
+                  # Add all required Jetpack Compose dependencies including Material Icons Extended & ViewModel Compose
+                  compose_deps_list = [
+                      "implementation 'androidx.activity:activity-compose:1.9.0'",
+                      "implementation platform('androidx.compose:compose-bom:2024.04.01')",
+                      "implementation 'androidx.compose.ui:ui'",
+                      "implementation 'androidx.compose.ui:ui-graphics'",
+                      "implementation 'androidx.compose.ui:ui-tooling-preview'",
+                      "implementation 'androidx.compose.material3:material3'",
+                      "implementation 'androidx.compose.material:material'",
+                      "implementation 'androidx.compose.material:material-icons-extended'",
+                      "implementation 'androidx.lifecycle:lifecycle-viewmodel-compose:2.8.0'",
+                      "implementation 'androidx.lifecycle:lifecycle-viewmodel-ktx:2.8.0'",
+                      "implementation 'org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.0'",
+                      "implementation 'androidx.navigation:navigation-compose:2.7.7'",
+                      "implementation 'androidx.compose.foundation:foundation'"
+                  ]
+                  for dep in compose_deps_list:
+                      dep_name = dep.split("'")[1]
+                      if dep_name not in bg:
+                          bg = bg.replace('dependencies {', 'dependencies {\n    ' + dep)
 
               with open(bg_path, 'w', encoding='utf-8') as f:
                   f.write(bg)
               print('Configured app/build.gradle (is_compose:', is_compose, ')')
 
-          # 5. Overwrite AndroidManifest.xml with dynamic permissions and appropriate Activity
-          if not permissions_list:
-              permissions_list = ['INTERNET']
+          # 5. Handle AndroidManifest.xml: PRESERVE user custom manifest if present in project!
+          custom_manifest = None
+          for root, dirs, files in os.walk('app/src/main/assets/standalone_app'):
+              for f in files:
+                  if f.lower() == 'androidmanifest.xml':
+                      custom_manifest = os.path.join(root, f)
+                      break
+              if custom_manifest:
+                  break
 
-          perm_lines = []
-          feat_lines = []
+          if custom_manifest and os.path.exists(custom_manifest):
+              with open(custom_manifest, 'r', encoding='utf-8') as cmf:
+                  user_manifest = cmf.read()
+              if 'xmlns:android=' not in user_manifest:
+                  user_manifest = user_manifest.replace('<manifest', '<manifest xmlns:android="http://schemas.android.com/apk/res/android"', 1)
+              with open('app/src/main/AndroidManifest.xml', 'w', encoding='utf-8') as f:
+                  f.write(user_manifest)
+              print('Preserved and applied user custom AndroidManifest.xml from project successfully!')
+          else:
+              # Fallback to generated manifest with dynamic permissions
+              if not permissions_list:
+                  permissions_list = ['INTERNET']
 
-          if 'INTERNET' in permissions_list:
-              perm_lines.append('    <uses-permission android:name="android.permission.INTERNET" />')
-              perm_lines.append('    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />')
+              perm_lines = []
+              feat_lines = []
 
-          if 'LOCATION' in permissions_list:
-              perm_lines.append('    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />')
-              perm_lines.append('    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />')
-              feat_lines.append('    <uses-feature android:name="android.hardware.location.gps" android:required="false" />')
+              if 'INTERNET' in permissions_list:
+                  perm_lines.append('    <uses-permission android:name="android.permission.INTERNET" />')
+                  perm_lines.append('    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />')
 
-          if 'CAMERA' in permissions_list:
-              perm_lines.append('    <uses-permission android:name="android.permission.CAMERA" />')
-              feat_lines.append('    <uses-feature android:name="android.hardware.camera" android:required="false" />')
-              feat_lines.append('    <uses-feature android:name="android.hardware.camera.autofocus" android:required="false" />')
+              if 'LOCATION' in permissions_list:
+                  perm_lines.append('    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />')
+                  perm_lines.append('    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />')
+                  feat_lines.append('    <uses-feature android:name="android.hardware.location.gps" android:required="false" />')
 
-          if 'AUDIO' in permissions_list:
-              perm_lines.append('    <uses-permission android:name="android.permission.RECORD_AUDIO" />')
-              perm_lines.append('    <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />')
-              feat_lines.append('    <uses-feature android:name="android.hardware.microphone" android:required="false" />')
+              if 'CAMERA' in permissions_list:
+                  perm_lines.append('    <uses-permission android:name="android.permission.CAMERA" />')
+                  feat_lines.append('    <uses-feature android:name="android.hardware.camera" android:required="false" />')
+                  feat_lines.append('    <uses-feature android:name="android.hardware.camera.autofocus" android:required="false" />')
 
-          if 'STORAGE' in permissions_list:
-              perm_lines.append('    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="32" />')
-              perm_lines.append('    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" android:maxSdkVersion="29" />')
-              perm_lines.append('    <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />')
-              perm_lines.append('    <uses-permission android:name="android.permission.READ_MEDIA_AUDIO" />')
+              if 'AUDIO' in permissions_list:
+                  perm_lines.append('    <uses-permission android:name="android.permission.RECORD_AUDIO" />')
+                  perm_lines.append('    <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />')
+                  feat_lines.append('    <uses-feature android:name="android.hardware.microphone" android:required="false" />')
 
-          launcher_activity = "com.example.htmleditor.MainActivity" if is_compose else "com.example.htmleditor.StandaloneAppActivity"
+              if 'STORAGE' in permissions_list:
+                  perm_lines.append('    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="32" />')
+                  perm_lines.append('    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" android:maxSdkVersion="29" />')
+                  perm_lines.append('    <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />')
+                  perm_lines.append('    <uses-permission android:name="android.permission.READ_MEDIA_AUDIO" />')
 
-          manifest_lines = [
-              '<?xml version="1.0" encoding="utf-8"?>',
-              '<manifest xmlns:android="http://schemas.android.com/apk/res/android"',
-              '    xmlns:tools="http://schemas.android.com/tools">',
-              ''
-          ] + perm_lines + [''] + feat_lines + [
-              '',
-              '    <application',
-              '        android:allowBackup="true"',
-              '        android:icon="@mipmap/ic_launcher"',
-              '        android:roundIcon="@mipmap/ic_launcher_round"',
-              '        android:label="@string/app_name"',
-              '        android:theme="@style/Theme.HtmlEditor"',
-              '        android:usesCleartextTraffic="true"',
-              '        tools:targetApi="34">',
-              '',
-              f'        <activity',
-              f'            android:name="{launcher_activity}"',
-              f'            android:exported="true"',
-              f'            android:configChanges="orientation|screenSize|keyboardHidden">',
-              f'            <intent-filter>',
-              f'                <action android:name="android.intent.action.MAIN" />',
-              f'                <category android:name="android.intent.category.LAUNCHER" />',
-              f'            </intent-filter>',
-              f'        </activity>',
-              '',
-              '    </application>',
-              '</manifest>'
-          ]
-          with open('app/src/main/AndroidManifest.xml', 'w', encoding='utf-8') as f:
-              f.write('\n'.join(manifest_lines) + '\n')
-          print('Wrote clean Standalone AndroidManifest.xml with selected permissions:', permissions_list)
+              launcher_activity = "com.example.htmleditor.MainActivity" if is_compose else "com.example.htmleditor.StandaloneAppActivity"
+
+              manifest_lines = [
+                  '<?xml version="1.0" encoding="utf-8"?>',
+                  '<manifest xmlns:android="http://schemas.android.com/apk/res/android"',
+                  '    xmlns:tools="http://schemas.android.com/tools">',
+                  ''
+              ] + perm_lines + [''] + feat_lines + [
+                  '',
+                  '    <application',
+                  '        android:allowBackup="true"',
+                  '        android:icon="@mipmap/ic_launcher"',
+                  '        android:roundIcon="@mipmap/ic_launcher_round"',
+                  '        android:label="@string/app_name"',
+                  '        android:theme="@style/Theme.HtmlEditor"',
+                  '        android:usesCleartextTraffic="true"',
+                  '        tools:targetApi="34">',
+                  '',
+                  f'        <activity',
+                  f'            android:name="{launcher_activity}"',
+                  f'            android:exported="true"',
+                  f'            android:configChanges="orientation|screenSize|keyboardHidden">',
+                  f'            <intent-filter>',
+                  f'                <action android:name="android.intent.action.MAIN" />',
+                  f'                <category android:name="android.intent.category.LAUNCHER" />',
+                  f'            </intent-filter>',
+                  f'        </activity>',
+                  '',
+                  '    </application>',
+                  '</manifest>'
+              ]
+              with open('app/src/main/AndroidManifest.xml', 'w', encoding='utf-8') as f:
+                  f.write('\n'.join(manifest_lines) + '\n')
+              print('Wrote clean Standalone AndroidManifest.xml with selected permissions:', permissions_list)
 
           # 6. Decode and apply custom icon (removing adaptive vector icons that override PNGs on Android 8+)
           if icon_base64:
