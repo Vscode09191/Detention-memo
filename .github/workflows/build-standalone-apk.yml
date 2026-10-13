@@ -120,116 +120,119 @@ jobs:
                   break
 
           is_compose = (project_type == 'compose') or has_kt_files
+          root_compose_pkg = None
+          main_activity_class = None
+
           if is_compose:
+              # Remove template activities from app/src/main/java/com/example/htmleditor to prevent duplicate/conflicting classes
+              for tf in ['MainActivity.kt', 'StandaloneAppActivity.kt']:
+                  tpath = os.path.join('app/src/main/java/com/example/htmleditor', tf)
+                  if os.path.exists(tpath):
+                      try:
+                          os.remove(tpath)
+                          print(f'Removed template {tf} to make way for standalone Compose app')
+                      except Exception as e:
+                          print('Note on template removal:', e)
+
+              # Zero-Tampering Engine: copy every Kotlin/Java source file to its declared package folder without altering code!
               for root, dirs, files in os.walk('app/src/main/assets/standalone_app'):
                   for f in files:
-                      if f.endswith('.kt'):
+                      if f.endswith(('.kt', '.java')):
                           src_file = os.path.join(root, f)
-                          rel = os.path.relpath(src_file, 'app/src/main/assets/standalone_app')
-                          if rel.startswith('src' + os.sep) or rel.startswith('src/'):
-                              rel = rel[4:]
-                          target_file = os.path.join('app/src/main/java/com/example/htmleditor', rel)
                           with open(src_file, 'r', encoding='utf-8') as kf:
                               code = kf.read()
 
-                          # Calculate subpackage based on directory structure
-                          rel_clean = rel.replace('\\', '/')
-                          rel_dir = os.path.dirname(rel_clean).strip('/')
-                          if rel_dir:
-                              sub_pkg = rel_dir.replace('/', '.')
-                              target_pkg = f'com.example.htmleditor.{sub_pkg}'
+                          # Find declared package in source file
+                          pkg_match = re.search(r'^\s*package\s+([\w\.]+)', code, re.MULTILINE)
+                          if pkg_match:
+                              declared_pkg = pkg_match.group(1).strip()
+                              pkg_dir = declared_pkg.replace('.', '/')
+                              target_file = os.path.join('app/src/main/java', pkg_dir, f)
+                              # Root package is the shortest or base package
+                              if not root_compose_pkg or len(declared_pkg.split('.')) < len(root_compose_pkg.split('.')):
+                                  root_compose_pkg = declared_pkg
                           else:
-                              target_pkg = 'com.example.htmleditor'
+                              rel = os.path.relpath(src_file, 'app/src/main/assets/standalone_app')
+                              if rel.startswith('src' + os.sep) or rel.startswith('src/'):
+                                  rel = rel[4:]
+                              target_file = os.path.join('app/src/main/java', rel)
 
-                          # Find original package if defined
-                          orig_pkg_match = re.search(r'package\s+([\w\.]+)', code)
-                          if orig_pkg_match:
-                              orig_pkg = orig_pkg_match.group(1)
-                              if orig_pkg != target_pkg:
-                                  # Replace package declaration
-                                  code = re.sub(r'package\s+[\w\.]+', f'package {target_pkg}', code, count=1)
-                                  # Update any internal imports referencing the old base package
-                                  code = re.sub(r'\bimport\s+' + re.escape(orig_pkg) + r'\b', 'import com.example.htmleditor', code)
-                          else:
-                              code = f'package {target_pkg}\n\n' + code
+                          # Identify launcher activity
+                          if f == 'MainActivity.kt' or 'ComponentActivity' in code or 'setContent {' in code:
+                              if pkg_match:
+                                  main_activity_class = f"{pkg_match.group(1)}.{f.replace('.kt', '').replace('.java', '')}"
+                              else:
+                                  main_activity_class = f.replace('.kt', '').replace('.java', '')
 
-                          code = code.replace('horizontalAlignment = Alignment.CenterVertically', 'horizontalAlignment = Alignment.CenterHorizontally')
-
-                          # Auto-fix missing imports for Compose in MainActivity or screen files
-                          if f == 'MainActivity.kt' or not rel_dir:
-                              required_imports = [
-                                  "import androidx.activity.ComponentActivity",
-                                  "import androidx.activity.compose.setContent",
-                                  "import androidx.compose.foundation.layout.*",
-                                  "import androidx.compose.material.icons.Icons",
-                                  "import androidx.compose.material.icons.filled.*",
-                                  "import androidx.compose.material3.*",
-                                  "import androidx.compose.runtime.*",
-                                  "import androidx.compose.ui.Alignment",
-                                  "import androidx.compose.ui.Modifier",
-                                  "import androidx.compose.ui.graphics.Color",
-                                  "import androidx.compose.ui.unit.dp",
-                                  "import androidx.compose.ui.unit.sp",
-                                  "import androidx.lifecycle.ViewModel",
-                                  "import androidx.lifecycle.viewModelScope",
-                                  "import androidx.lifecycle.viewmodel.compose.viewModel",
-                                  "import kotlinx.coroutines.launch",
-                                  "import kotlinx.coroutines.delay"
-                              ]
-                              missing_imports = [imp for imp in required_imports if imp not in code]
-                              if missing_imports:
-                                  code = re.sub(r'(package\s+[\w\.]+\n)', r'\1\n' + '\n'.join(missing_imports) + '\n', code, count=1)
+                          # Auto-heal: Ensure property delegate imports (getValue/setValue) if file uses `by remember`
+                          if 'by remember' in code:
+                              delegate_imports = []
+                              if 'import androidx.compose.runtime.getValue' not in code and 'import androidx.compose.runtime.*' not in code:
+                                  delegate_imports.append('import androidx.compose.runtime.getValue')
+                              if 'import androidx.compose.runtime.setValue' not in code and 'import androidx.compose.runtime.*' not in code:
+                                  delegate_imports.append('import androidx.compose.runtime.setValue')
+                              if delegate_imports:
+                                  if pkg_match:
+                                      code = re.sub(r'(package\s+[\w\.]+\n)', r'\1\n' + '\n'.join(delegate_imports) + '\n', code, count=1)
+                                  else:
+                                      code = '\n'.join(delegate_imports) + '\n' + code
 
                           os.makedirs(os.path.dirname(target_file), exist_ok=True)
                           with open(target_file, 'w', encoding='utf-8') as kf:
                               kf.write(code)
-                          print(f'Injected Compose source file: {rel} (package: {target_pkg})')
+                          print(f'Preserved Compose source: {f} -> {target_file}')
 
-              # Guarantee fallback Theme.kt exists so any import of AppTheme succeeds
-              fallback_theme = 'app/src/main/java/com/example/htmleditor/ui/theme/Theme.kt'
-              if not os.path.exists(fallback_theme):
-                  os.makedirs(os.path.dirname(fallback_theme), exist_ok=True)
-                  theme_lines = [
-                      "package com.example.htmleditor.ui.theme",
-                      "",
-                      "import androidx.compose.foundation.isSystemInDarkTheme",
-                      "import androidx.compose.material3.*",
-                      "import androidx.compose.runtime.Composable",
-                      "import androidx.compose.ui.graphics.Color",
-                      "import androidx.compose.ui.text.TextStyle",
-                      "import androidx.compose.ui.text.font.FontFamily",
-                      "import androidx.compose.ui.text.font.FontWeight",
-                      "import androidx.compose.ui.unit.sp",
-                      "",
-                      "val Purple80 = Color(0xFFD0BCFF)",
-                      "val PurpleGrey80 = Color(0xFFCCC2DC)",
-                      "val Pink80 = Color(0xFFEFB8C8)",
-                      "val Purple40 = Color(0xFF6650a4)",
-                      "val PurpleGrey40 = Color(0xFF625b71)",
-                      "val Pink40 = Color(0xFF7D5260)",
-                      "",
-                      "val Typography = Typography(",
-                      "    bodyLarge = TextStyle(",
-                      "        fontFamily = FontFamily.Default,",
-                      "        fontWeight = FontWeight.Normal,",
-                      "        fontSize = 16.sp,",
-                      "        lineHeight = 24.sp,",
-                      "        letterSpacing = 0.5.sp",
-                      "    )",
-                      ")",
-                      "",
-                      "private val DarkColorScheme = darkColorScheme(primary = Purple80, secondary = PurpleGrey80, tertiary = Pink80)",
-                      "private val LightColorScheme = lightColorScheme(primary = Purple40, secondary = PurpleGrey40, tertiary = Pink40)",
-                      "",
-                      "@Composable",
-                      "fun AppTheme(darkTheme: Boolean = isSystemInDarkTheme(), content: @Composable () -> Unit) {",
-                      "    val colorScheme = if (darkTheme) DarkColorScheme else LightColorScheme",
-                      "    MaterialTheme(colorScheme = colorScheme, typography = Typography, content = content)",
-                      "}"
-                  ]
-                  with open(fallback_theme, 'w', encoding='utf-8') as ftf:
-                      ftf.write('\n'.join(theme_lines) + '\n')
-                  print('Created fallback ui/theme/Theme.kt with AppTheme')
+              # Guarantee fallback Theme.kt exists if user project does not define its own AppTheme
+              theme_dirs = ['app/src/main/java/com/example/htmleditor/ui/theme']
+              if root_compose_pkg:
+                  theme_dirs.append(os.path.join('app/src/main/java', root_compose_pkg.replace('.', '/'), 'ui/theme'))
+
+              for tdir in theme_dirs:
+                  fb_theme = os.path.join(tdir, 'Theme.kt')
+                  if not os.path.exists(fb_theme):
+                      os.makedirs(tdir, exist_ok=True)
+                      pkg_name = tdir.replace('app/src/main/java/', '').replace('/', '.')
+                      theme_lines = [
+                          f"package {pkg_name}",
+                          "",
+                          "import androidx.compose.foundation.isSystemInDarkTheme",
+                          "import androidx.compose.material3.*",
+                          "import androidx.compose.runtime.Composable",
+                          "import androidx.compose.ui.graphics.Color",
+                          "import androidx.compose.ui.text.TextStyle",
+                          "import androidx.compose.ui.text.font.FontFamily",
+                          "import androidx.compose.ui.text.font.FontWeight",
+                          "import androidx.compose.ui.unit.sp",
+                          "",
+                          "val Purple80 = Color(0xFFD0BCFF)",
+                          "val PurpleGrey80 = Color(0xFFCCC2DC)",
+                          "val Pink80 = Color(0xFFEFB8C8)",
+                          "val Purple40 = Color(0xFF6650a4)",
+                          "val PurpleGrey40 = Color(0xFF625b71)",
+                          "val Pink40 = Color(0xFF7D5260)",
+                          "",
+                          "val Typography = Typography(",
+                          "    bodyLarge = TextStyle(",
+                          "        fontFamily = FontFamily.Default,",
+                          "        fontWeight = FontWeight.Normal,",
+                          "        fontSize = 16.sp,",
+                          "        lineHeight = 24.sp,",
+                          "        letterSpacing = 0.5.sp",
+                          "    )",
+                          ")",
+                          "",
+                          "private val DarkColorScheme = darkColorScheme(primary = Purple80, secondary = PurpleGrey80, tertiary = Pink80)",
+                          "private val LightColorScheme = lightColorScheme(primary = Purple40, secondary = PurpleGrey40, tertiary = Pink40)",
+                          "",
+                          "@Composable",
+                          "fun AppTheme(darkTheme: Boolean = isSystemInDarkTheme(), content: @Composable () -> Unit) {",
+                          "    val colorScheme = if (darkTheme) DarkColorScheme else LightColorScheme",
+                          "    MaterialTheme(colorScheme = colorScheme, typography = Typography, content = content)",
+                          "}"
+                      ]
+                      with open(fb_theme, 'w', encoding='utf-8') as ftf:
+                          ftf.write('\n'.join(theme_lines) + '\n')
+                      print(f'Created fallback ui/theme/Theme.kt in {tdir}')
 
               # 2c. Intelligently merge custom res/values XMLs from project without overwriting base app resources
               base_colors = {
@@ -366,6 +369,11 @@ jobs:
               with open(bg_path, 'r', encoding='utf-8') as f:
                   bg = f.read()
 
+              if is_compose and root_compose_pkg:
+                  bg = re.sub(r'namespace\s+["\'][^"\']+["\']', f'namespace "{root_compose_pkg}"', bg)
+                  if not package_id or package_id == 'com.example.htmleditor':
+                      package_id = root_compose_pkg
+
               if package_id and package_id != 'com.example.htmleditor':
                   bg = re.sub(r'applicationId\s+["\'][^"\']+["\']', f'applicationId "{package_id}"', bg)
                   print('Updated package ID to:', package_id)
@@ -417,7 +425,7 @@ jobs:
               if custom_manifest:
                   break
 
-          launcher_activity = "com.example.htmleditor.MainActivity" if is_compose else "com.example.htmleditor.StandaloneAppActivity"
+          launcher_activity = main_activity_class if (is_compose and main_activity_class) else ("com.example.htmleditor.MainActivity" if is_compose else "com.example.htmleditor.StandaloneAppActivity")
 
           if custom_manifest and os.path.exists(custom_manifest):
               with open(custom_manifest, 'r', encoding='utf-8') as cmf:
@@ -433,7 +441,10 @@ jobs:
                   user_manifest = user_manifest.replace('<manifest', '<manifest xmlns:tools="http://schemas.android.com/tools"', 1)
 
               # Self-heal 3: Normalize launcher activity class to matching compiled launcher
-              user_manifest = re.sub(r'android:name\s*=\s*["\'][\w\.]*MainActivity["\']', f'android:name="{launcher_activity}"', user_manifest)
+              if main_activity_class:
+                  user_manifest = re.sub(r'android:name\s*=\s*["\'][\w\.]*MainActivity["\']', f'android:name="{main_activity_class}"', user_manifest)
+              elif not is_compose:
+                  user_manifest = re.sub(r'android:name\s*=\s*["\'][\w\.]*MainActivity["\']', f'android:name="{launcher_activity}"', user_manifest)
 
               # Self-heal 4: Ensure launcher activity has android:exported="true" (mandatory since Android 12)
               if '<intent-filter>' in user_manifest and 'android:exported=' not in user_manifest:
