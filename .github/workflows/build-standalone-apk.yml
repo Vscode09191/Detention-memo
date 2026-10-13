@@ -337,7 +337,17 @@ jobs:
                               current_th = '<resources xmlns:tools="http://schemas.android.com/tools">\n    <style name="Theme.HtmlEditor" parent="Theme.MaterialComponents.DayNight.NoActionBar">\n        <item name="android:windowBackground">@color/editor_bg</item>\n        <item name="android:statusBarColor">@color/toolbar_bg</item>\n    </style>\n</resources>'
                           user_styles = re.findall(r'(<style[\s\S]*?</style>)', th_content)
                           for ust in user_styles:
-                              if 'name="Theme.HtmlEditor"' not in ust and ust not in current_th:
+                              m = re.search(r'<style\s+name=["\']([^"\']+)["\']', ust)
+                              if m:
+                                  s_name = m.group(1)
+                                  if s_name == 'Theme.HtmlEditor':
+                                      continue
+                                  pattern = rf'<style\s+name=["\']{re.escape(s_name)}["\'][\s\S]*?</style>'
+                                  if re.search(pattern, current_th):
+                                      current_th = re.sub(pattern, ust, current_th)
+                                  else:
+                                      current_th = current_th.replace('</resources>', f'    {ust}\n</resources>')
+                              elif ust not in current_th:
                                   current_th = current_th.replace('</resources>', f'    {ust}\n</resources>')
                           with open(target_th_file, 'w', encoding='utf-8') as base_th:
                               base_th.write(current_th)
@@ -581,6 +591,21 @@ jobs:
                       stubs.append(f'    <style name="{mth}" parent="Theme.MaterialComponents.DayNight.NoActionBar">\n        <item name="android:windowNoTitle">true</item>\n        <item name="android:windowActionBar">false</item>\n    </style>')
                   current_themes = current_themes.replace('</resources>', '\n'.join(stubs) + '\n</resources>')
 
+              with open(themes_xml_path, 'w', encoding='utf-8') as tf:
+                  tf.write(current_themes)
+              # Final safety pass: deduplicate any duplicate <style name="..."> in themes.xml
+              seen_styles = set()
+              def dedupe_style(match):
+                  s_full = match.group(0)
+                  sm = re.search(r'<style\s+name=["\']([^"\']+)["\']', s_full)
+                  if sm:
+                      s_name = sm.group(1)
+                      if s_name in seen_styles:
+                          return ''
+                      seen_styles.add(s_name)
+                  return s_full
+
+              current_themes = re.sub(r'<style[\s\S]*?</style>', dedupe_style, current_themes)
               with open(themes_xml_path, 'w', encoding='utf-8') as tf:
                   tf.write(current_themes)
               print(f'Self-healed missing styles in themes.xml: {missing_themes}')
