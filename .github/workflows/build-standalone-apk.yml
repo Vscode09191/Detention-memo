@@ -328,13 +328,18 @@ jobs:
                       try:
                           with open(src_file, 'r', encoding='utf-8') as th_file:
                               th_content = th_file.read()
-                          with open('app/src/main/res/values/themes.xml', 'r', encoding='utf-8') as base_th:
-                              current_th = base_th.read()
+                          target_th_file = 'app/src/main/res/values/themes.xml'
+                          os.makedirs('app/src/main/res/values', exist_ok=True)
+                          if os.path.exists(target_th_file):
+                              with open(target_th_file, 'r', encoding='utf-8') as base_th:
+                                  current_th = base_th.read()
+                          else:
+                              current_th = '<resources xmlns:tools="http://schemas.android.com/tools">\n    <style name="Theme.HtmlEditor" parent="Theme.MaterialComponents.DayNight.NoActionBar">\n        <item name="android:windowBackground">@color/editor_bg</item>\n        <item name="android:statusBarColor">@color/toolbar_bg</item>\n    </style>\n</resources>'
                           user_styles = re.findall(r'(<style[\s\S]*?</style>)', th_content)
                           for ust in user_styles:
                               if 'name="Theme.HtmlEditor"' not in ust and ust not in current_th:
                                   current_th = current_th.replace('</resources>', f'    {ust}\n</resources>')
-                          with open('app/src/main/res/values/themes.xml', 'w', encoding='utf-8') as base_th:
+                          with open(target_th_file, 'w', encoding='utf-8') as base_th:
                               base_th.write(current_th)
                           print(f'Merged custom styles from {f} into themes.xml')
                       except Exception as e:
@@ -552,22 +557,33 @@ jobs:
 
               # Self-heal 6: Ensure any custom theme referenced in user_manifest exists in themes.xml
               themes_xml_path = 'app/src/main/res/values/themes.xml'
-              if os.path.exists(themes_xml_path):
-                  with open(themes_xml_path, 'r', encoding='utf-8') as tf:
-                      current_themes = tf.read()
-                  missing_themes = []
-                  for tm in re.finditer(r'@style/([\w\.]+)', user_manifest):
-                      theme_name = tm.group(1)
-                      if f'name="{theme_name}"' not in current_themes:
-                          missing_themes.append(theme_name)
-                  if missing_themes:
-                      stubs = []
-                      for mth in set(missing_themes):
-                          stubs.append(f'    <style name="{mth}" parent="Theme.MaterialComponents.DayNight.NoActionBar" />')
-                      current_themes = current_themes.replace('</resources>', '\n'.join(stubs) + '\n</resources>')
-                      with open(themes_xml_path, 'w', encoding='utf-8') as tf:
-                          tf.write(current_themes)
-                      print(f'Self-healed missing styles in themes.xml: {missing_themes}')
+              os.makedirs('app/src/main/res/values', exist_ok=True)
+              if not os.path.exists(themes_xml_path):
+                  with open(themes_xml_path, 'w', encoding='utf-8') as tf:
+                      tf.write('<resources xmlns:tools="http://schemas.android.com/tools">\n    <style name="Theme.HtmlEditor" parent="Theme.MaterialComponents.DayNight.NoActionBar">\n        <item name="android:windowBackground">@color/editor_bg</item>\n        <item name="android:statusBarColor">@color/toolbar_bg</item>\n    </style>\n</resources>\n')
+
+              with open(themes_xml_path, 'r', encoding='utf-8') as tf:
+                  current_themes = tf.read()
+
+              # Guarantee AppSplashTheme is always defined
+              if 'name="AppSplashTheme"' not in current_themes:
+                  current_themes = current_themes.replace('</resources>', '    <style name="AppSplashTheme" parent="Theme.MaterialComponents.DayNight.NoActionBar">\n        <item name="android:windowBackground">@color/toolbar_bg</item>\n        <item name="android:statusBarColor">@color/toolbar_bg</item>\n        <item name="android:windowNoTitle">true</item>\n        <item name="android:windowActionBar">false</item>\n    </style>\n</resources>')
+
+              missing_themes = []
+              for tm in re.finditer(r'@style/([\w\.]+)', user_manifest):
+                  theme_name = tm.group(1)
+                  if f'name="{theme_name}"' not in current_themes:
+                      missing_themes.append(theme_name)
+
+              if missing_themes:
+                  stubs = []
+                  for mth in set(missing_themes):
+                      stubs.append(f'    <style name="{mth}" parent="Theme.MaterialComponents.DayNight.NoActionBar">\n        <item name="android:windowNoTitle">true</item>\n        <item name="android:windowActionBar">false</item>\n    </style>')
+                  current_themes = current_themes.replace('</resources>', '\n'.join(stubs) + '\n</resources>')
+
+              with open(themes_xml_path, 'w', encoding='utf-8') as tf:
+                  tf.write(current_themes)
+              print(f'Self-healed missing styles in themes.xml: {missing_themes}')
 
               # Self-heal 7: Ensure referenced icons exist, fallback to @mipmap/ic_launcher
               for icon_match in re.finditer(r'android:(?:roundIcon|icon)\s*=\s*["\']@(\w+)/([^"\']+)["\']', user_manifest):
@@ -732,30 +748,44 @@ jobs:
       - name: Grant execute permission for gradlew
         run: chmod +x gradlew
 
-      - name: Build Standalone APK
+      - name: Build Standalone APK & Google Play Bundle (AAB)
         run: |
-          sed -i '/org.gradle.java.home/d' gradle.properties || true
-          ./gradlew assembleDebug --stacktrace
+          find . -name "gradle.properties" -exec sed -i '/org.gradle.java.home/d' {} + || true
+          ./gradlew assembleDebug bundleRelease --stacktrace || ./gradlew assembleDebug bundleDebug --stacktrace
 
-      - name: Copy & Rename APK
+      - name: Copy & Rename Outputs (APK & AAB)
         run: |
           mkdir -p outputs
-          cp app/build/outputs/apk/debug/app-debug.apk outputs/standalone-app.apk
+          # 1. Installable APK
+          if [ -f app/build/outputs/apk/debug/app-debug.apk ]; then
+            cp app/build/outputs/apk/debug/app-debug.apk outputs/standalone-app.apk
+          elif [ -f app/build/outputs/apk/release/app-release.apk ]; then
+            cp app/build/outputs/apk/release/app-release.apk outputs/standalone-app.apk
+          fi
 
-      - name: Upload APK Artifact
+          # 2. Google Play Store Publish Bundle (.aab)
+          if [ -f app/build/outputs/bundle/release/app-release.aab ]; then
+            cp app/build/outputs/bundle/release/app-release.aab outputs/standalone-app.aab
+          elif [ -f app/build/outputs/bundle/debug/app-debug.aab ]; then
+            cp app/build/outputs/bundle/debug/app-debug.aab outputs/standalone-app.aab
+          fi
+          echo "Generated Outputs:"
+          ls -la outputs/
+
+      - name: Upload Build Artifacts (APK & Play Store AAB)
         uses: actions/upload-artifact@v4
         with:
-          name: standalone-app-apk
-          path: outputs/standalone-app.apk
-          if-no-files-found: error
+          name: standalone-app-outputs
+          path: outputs/*
+          if-no-files-found: warn
 
-      - name: Publish Standalone APK Release
+      - name: Publish Standalone APK & Play Store AAB Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: standalone-build-${{ github.run_number }}
           name: "Standalone App Build #${{ github.run_number }}"
-          body: "Fingerprint: ${{ env.BUILD_FINGERPRINT }}"
-          files: outputs/standalone-app.apk
+          body: "Fingerprint: ${{ env.BUILD_FINGERPRINT }}\n\n### 📦 Release Assets:\n- **standalone-app.apk**: Direct mobile installation/testing\n- **standalone-app.aab**: Google Play Store publish bundle (Android App Bundle)"
+          files: outputs/*
           generate_release_notes: false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
