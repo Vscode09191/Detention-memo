@@ -113,7 +113,13 @@ jobs:
               print('Injected HTML content into assets/standalone_app/index.html')
 
           # 2b. If Jetpack Compose project, inject custom Kotlin files and resource files into source set
-          is_compose = (project_type == 'compose')
+          has_kt_files = False
+          for root, dirs, files in os.walk('app/src/main/assets/standalone_app'):
+              if any(f.endswith('.kt') for f in files):
+                  has_kt_files = True
+                  break
+
+          is_compose = (project_type == 'compose') or has_kt_files
           if is_compose:
               for root, dirs, files in os.walk('app/src/main/assets/standalone_app'):
                   for f in files:
@@ -125,37 +131,103 @@ jobs:
                           target_file = os.path.join('app/src/main/java/com/example/htmleditor', rel)
                           with open(src_file, 'r', encoding='utf-8') as kf:
                               code = kf.read()
-                          code = re.sub(r'package\s+[\w\.]+', 'package com.example.htmleditor', code, count=1)
+
+                          # Calculate subpackage based on directory structure
+                          rel_clean = rel.replace('\\', '/')
+                          rel_dir = os.path.dirname(rel_clean).strip('/')
+                          if rel_dir:
+                              sub_pkg = rel_dir.replace('/', '.')
+                              target_pkg = f'com.example.htmleditor.{sub_pkg}'
+                          else:
+                              target_pkg = 'com.example.htmleditor'
+
+                          # Find original package if defined
+                          orig_pkg_match = re.search(r'package\s+([\w\.]+)', code)
+                          if orig_pkg_match:
+                              orig_pkg = orig_pkg_match.group(1)
+                              if orig_pkg != target_pkg:
+                                  # Replace package declaration
+                                  code = re.sub(r'package\s+[\w\.]+', f'package {target_pkg}', code, count=1)
+                                  # Update any internal imports referencing the old base package
+                                  code = re.sub(r'\bimport\s+' + re.escape(orig_pkg) + r'\b', 'import com.example.htmleditor', code)
+                          else:
+                              code = f'package {target_pkg}\n\n' + code
+
                           code = code.replace('horizontalAlignment = Alignment.CenterVertically', 'horizontalAlignment = Alignment.CenterHorizontally')
 
-                          # Auto-fix missing imports for Compose
-                          required_imports = [
-                              "import androidx.activity.ComponentActivity",
-                              "import androidx.activity.compose.setContent",
-                              "import androidx.compose.foundation.layout.*",
-                              "import androidx.compose.material.icons.Icons",
-                              "import androidx.compose.material.icons.filled.*",
-                              "import androidx.compose.material3.*",
-                              "import androidx.compose.runtime.*",
-                              "import androidx.compose.ui.Alignment",
-                              "import androidx.compose.ui.Modifier",
-                              "import androidx.compose.ui.graphics.Color",
-                              "import androidx.compose.ui.unit.dp",
-                              "import androidx.compose.ui.unit.sp",
-                              "import androidx.lifecycle.ViewModel",
-                              "import androidx.lifecycle.viewModelScope",
-                              "import androidx.lifecycle.viewmodel.compose.viewModel",
-                              "import kotlinx.coroutines.launch",
-                              "import kotlinx.coroutines.delay"
-                          ]
-                          missing_imports = [imp for imp in required_imports if imp not in code]
-                          if missing_imports:
-                              code = code.replace('package com.example.htmleditor', 'package com.example.htmleditor\n\n' + '\n'.join(missing_imports), 1)
+                          # Auto-fix missing imports for Compose in MainActivity or screen files
+                          if f == 'MainActivity.kt' or not rel_dir:
+                              required_imports = [
+                                  "import androidx.activity.ComponentActivity",
+                                  "import androidx.activity.compose.setContent",
+                                  "import androidx.compose.foundation.layout.*",
+                                  "import androidx.compose.material.icons.Icons",
+                                  "import androidx.compose.material.icons.filled.*",
+                                  "import androidx.compose.material3.*",
+                                  "import androidx.compose.runtime.*",
+                                  "import androidx.compose.ui.Alignment",
+                                  "import androidx.compose.ui.Modifier",
+                                  "import androidx.compose.ui.graphics.Color",
+                                  "import androidx.compose.ui.unit.dp",
+                                  "import androidx.compose.ui.unit.sp",
+                                  "import androidx.lifecycle.ViewModel",
+                                  "import androidx.lifecycle.viewModelScope",
+                                  "import androidx.lifecycle.viewmodel.compose.viewModel",
+                                  "import kotlinx.coroutines.launch",
+                                  "import kotlinx.coroutines.delay"
+                              ]
+                              missing_imports = [imp for imp in required_imports if imp not in code]
+                              if missing_imports:
+                                  code = re.sub(r'(package\s+[\w\.]+\n)', r'\1\n' + '\n'.join(missing_imports) + '\n', code, count=1)
 
                           os.makedirs(os.path.dirname(target_file), exist_ok=True)
                           with open(target_file, 'w', encoding='utf-8') as kf:
                               kf.write(code)
-                          print(f'Injected Compose source file: {rel}')
+                          print(f'Injected Compose source file: {rel} (package: {target_pkg})')
+
+              # Guarantee fallback Theme.kt exists so any import of AppTheme succeeds
+              fallback_theme = 'app/src/main/java/com/example/htmleditor/ui/theme/Theme.kt'
+              if not os.path.exists(fallback_theme):
+                  os.makedirs(os.path.dirname(fallback_theme), exist_ok=True)
+                  with open(fallback_theme, 'w', encoding='utf-8') as ftf:
+                      ftf.write('''package com.example.htmleditor.ui.theme
+
+import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.material3.*
+import androidx.compose.runtime.Composable
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.sp
+
+val Purple80 = Color(0xFFD0BCFF)
+val PurpleGrey80 = Color(0xFFCCC2DC)
+val Pink80 = Color(0xFFEFB8C8)
+val Purple40 = Color(0xFF6650a4)
+val PurpleGrey40 = Color(0xFF625b71)
+val Pink40 = Color(0xFF7D5260)
+
+val Typography = Typography(
+    bodyLarge = TextStyle(
+        fontFamily = FontFamily.Default,
+        fontWeight = FontWeight.Normal,
+        fontSize = 16.sp,
+        lineHeight = 24.sp,
+        letterSpacing = 0.5.sp
+    )
+)
+
+private val DarkColorScheme = darkColorScheme(primary = Purple80, secondary = PurpleGrey80, tertiary = Pink80)
+private val LightColorScheme = lightColorScheme(primary = Purple40, secondary = PurpleGrey40, tertiary = Pink40)
+
+@Composable
+fun AppTheme(darkTheme: Boolean = isSystemInDarkTheme(), content: @Composable () -> Unit) {
+    val colorScheme = if (darkTheme) DarkColorScheme else LightColorScheme
+    MaterialTheme(colorScheme = colorScheme, typography = Typography, content = content)
+}
+''')
+                  print('Created fallback ui/theme/Theme.kt with AppTheme')
 
               # 2c. Intelligently merge custom res/values XMLs from project without overwriting base app resources
               base_colors = {
