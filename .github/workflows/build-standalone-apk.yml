@@ -124,15 +124,27 @@ jobs:
           main_activity_class = None
 
           if is_compose:
-              # Remove template activities from app/src/main/java/com/example/htmleditor to prevent duplicate/conflicting classes
-              for tf in ['MainActivity.kt', 'StandaloneAppActivity.kt']:
-                  tpath = os.path.join('app/src/main/java/com/example/htmleditor', tf)
-                  if os.path.exists(tpath):
-                      try:
-                          os.remove(tpath)
-                          print(f'Removed template {tf} to make way for standalone Compose app')
-                      except Exception as e:
-                          print('Note on template removal:', e)
+              # CRITICAL: Standalone Compose apps must not compile the HTML Editor IDE code!
+              # When namespace changes to the user project's package, com.example.htmleditor.R is no longer generated.
+              # Wiping app/src/main/java/com/example/htmleditor completely prevents leftover IDE files
+              # (EditorTabAdapter, FileListAdapter, PreviewActivity, StandaloneApkBuilder, etc.) from failing with Unresolved reference: R.
+              import shutil
+              editor_dir = 'app/src/main/java/com/example/htmleditor'
+              if os.path.exists(editor_dir):
+                  shutil.rmtree(editor_dir, ignore_errors=True)
+                  print('Cleaned up entire HTML Editor IDE codebase to isolate standalone Compose app')
+          else:
+              # For HTML standalone web apps:
+              # Only StandaloneAppActivity.kt is needed. Remove all other editor tool classes.
+              editor_dir = 'app/src/main/java/com/example/htmleditor'
+              if os.path.exists(editor_dir):
+                  for ef in os.listdir(editor_dir):
+                      if ef != 'StandaloneAppActivity.kt' and os.path.isfile(os.path.join(editor_dir, ef)):
+                          try:
+                              os.remove(os.path.join(editor_dir, ef))
+                              print(f'Cleaned unused editor file for standalone HTML build: {ef}')
+                          except Exception as e:
+                              pass
 
               # Zero-Tampering Engine: copy every Kotlin/Java source file to its declared package folder without altering code!
               for root, dirs, files in os.walk('app/src/main/assets/standalone_app'):
@@ -183,9 +195,11 @@ jobs:
                           print(f'Preserved Compose source: {f} -> {target_file}')
 
               # Guarantee fallback Theme.kt exists if user project does not define its own AppTheme
-              theme_dirs = ['app/src/main/java/com/example/htmleditor/ui/theme']
+              theme_dirs = []
               if root_compose_pkg:
                   theme_dirs.append(os.path.join('app/src/main/java', root_compose_pkg.replace('.', '/'), 'ui/theme'))
+              else:
+                  theme_dirs.append('app/src/main/java/com/example/htmleditor/ui/theme')
 
               for tdir in theme_dirs:
                   fb_theme = os.path.join(tdir, 'Theme.kt')
@@ -402,6 +416,8 @@ jobs:
                       "implementation 'androidx.compose.material:material-icons-extended'",
                       "implementation 'androidx.lifecycle:lifecycle-viewmodel-compose:2.8.0'",
                       "implementation 'androidx.lifecycle:lifecycle-viewmodel-ktx:2.8.0'",
+                      "implementation 'androidx.lifecycle:lifecycle-runtime-compose:2.8.0'",
+                      "implementation 'androidx.compose.runtime:runtime'",
                       "implementation 'org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.0'",
                       "implementation 'androidx.navigation:navigation-compose:2.7.7'",
                       "implementation 'androidx.compose.foundation:foundation'"
@@ -446,13 +462,49 @@ jobs:
               elif not is_compose:
                   user_manifest = re.sub(r'android:name\s*=\s*["\'][\w\.]*MainActivity["\']', f'android:name="{launcher_activity}"', user_manifest)
 
-              # Self-heal 4: Ensure launcher activity has android:exported="true" (mandatory since Android 12)
-              if '<intent-filter>' in user_manifest and 'android:exported=' not in user_manifest:
-                  user_manifest = user_manifest.replace('<activity', '<activity android:exported="true"', 1)
+              # Self-heal 4: Ensure all activities, services, receivers have android:exported="true" (mandatory in Android 12+)
+              for comp in ['activity', 'service', 'receiver']:
+                  def ensure_comp_exported(match):
+                      tag = match.group(0)
+                      if 'android:exported' not in tag:
+                          return re.sub(rf'<{comp}\b', f'<{comp} android:exported="true"', tag, count=1)
+                      return tag
+                  user_manifest = re.sub(rf'<{comp}\b[^>]*>', ensure_comp_exported, user_manifest, flags=re.DOTALL)
 
               # Self-heal 5: Ensure application has a valid theme
               if 'android:theme=' not in user_manifest:
                   user_manifest = user_manifest.replace('<application', '<application android:theme="@style/Theme.HtmlEditor"', 1)
+
+              # Self-heal 6: Ensure any custom theme referenced in user_manifest exists in themes.xml
+              themes_xml_path = 'app/src/main/res/values/themes.xml'
+              if os.path.exists(themes_xml_path):
+                  with open(themes_xml_path, 'r', encoding='utf-8') as tf:
+                      current_themes = tf.read()
+                  missing_themes = []
+                  for tm in re.finditer(r'@style/([\w\.]+)', user_manifest):
+                      theme_name = tm.group(1)
+                      if f'name="{theme_name}"' not in current_themes:
+                          missing_themes.append(theme_name)
+                  if missing_themes:
+                      stubs = []
+                      for mth in set(missing_themes):
+                          stubs.append(f'    <style name="{mth}" parent="Theme.MaterialComponents.DayNight.NoActionBar" />')
+                      current_themes = current_themes.replace('</resources>', '\n'.join(stubs) + '\n</resources>')
+                      with open(themes_xml_path, 'w', encoding='utf-8') as tf:
+                          tf.write(current_themes)
+                      print(f'Self-healed missing styles in themes.xml: {missing_themes}')
+
+              # Self-heal 7: Ensure referenced icons exist, fallback to @mipmap/ic_launcher
+              for icon_match in re.finditer(r'android:(?:roundIcon|icon)\s*=\s*["\']@(\w+)/([^"\']+)["\']', user_manifest):
+                  res_name = icon_match.group(2)
+                  found_icon = False
+                  for rroot, rdirs, rfiles in os.walk('app/src/main/res'):
+                      if any(rf.split('.')[0] == res_name for rf in rfiles):
+                          found_icon = True
+                          break
+                  if not found_icon:
+                      user_manifest = user_manifest.replace(icon_match.group(0), 'android:icon="@mipmap/ic_launcher"')
+                      print(f'Self-healed missing icon reference {res_name} -> @mipmap/ic_launcher')
 
               with open('app/src/main/AndroidManifest.xml', 'w', encoding='utf-8') as f:
                   f.write(user_manifest)
