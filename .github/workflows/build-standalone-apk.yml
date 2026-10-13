@@ -290,13 +290,52 @@ jobs:
                               print('Error merging themes/styles:', e)
                       elif f.endswith('.xml') and f_lower != 'androidmanifest.xml':
                           src_file = os.path.join(root, f)
-                          target_file = os.path.join('app/src/main/res/values', f)
-                          os.makedirs(os.path.dirname(target_file), exist_ok=True)
-                          with open(src_file, 'r', encoding='utf-8') as sxf:
-                              content = sxf.read()
-                          with open(target_file, 'w', encoding='utf-8') as txf:
-                              txf.write(content)
-                          print(f'Injected Resource XML: {f}')
+                          norm_root = root.replace('\\', '/')
+                          try:
+                              with open(src_file, 'r', encoding='utf-8') as sxf:
+                                  content = sxf.read()
+                              target_dir = None
+                              if '/res/' in norm_root:
+                                  subpath = norm_root.split('/res/')[-1]
+                                  if subpath.startswith('values'):
+                                      if '<resources' in content:
+                                          target_dir = os.path.join('app/src/main/res', subpath)
+                                      elif '<adaptive-icon' in content or f_lower.startswith('ic_launcher'):
+                                          target_dir = 'app/src/main/res/mipmap-anydpi-v26'
+                                      else:
+                                          target_dir = 'app/src/main/res/drawable'
+                                  else:
+                                      target_dir = os.path.join('app/src/main/res', subpath)
+                              else:
+                                  if '<adaptive-icon' in content or f_lower.startswith('ic_launcher'):
+                                      target_dir = 'app/src/main/res/mipmap-anydpi-v26'
+                                  elif any(tag in content for tag in ['<vector', '<shape', '<layer-list', '<selector', '<bitmap', '<animated-vector']):
+                                      target_dir = 'app/src/main/res/drawable'
+                                  elif any(tag in content.lower() for tag in ['<layout', '<linearlayout', '<relativelayout', '<framelayout', '<coordinatorlayout']):
+                                      target_dir = 'app/src/main/res/layout'
+                                  elif '<resources' in content:
+                                      target_dir = 'app/src/main/res/values'
+                                  elif any(tag in content for tag in ['<PreferenceScreen', '<network-security-config', '<paths', '<shortcuts']):
+                                      target_dir = 'app/src/main/res/xml'
+
+                              if target_dir:
+                                  os.makedirs(target_dir, exist_ok=True)
+                                  target_file = os.path.join(target_dir, f)
+                                  with open(target_file, 'w', encoding='utf-8') as txf:
+                                      txf.write(content)
+                                  print(f'Safely routed Resource XML: {f} -> {target_dir}')
+                          except Exception as e:
+                              print(f'Error processing XML {f}:', e)
+                      elif f_lower.endswith(('.png', '.webp', '.jpg', '.jpeg')):
+                          src_file = os.path.join(root, f)
+                          norm_root = root.replace('\\', '/')
+                          if '/res/' in norm_root:
+                              subpath = norm_root.split('/res/')[-1]
+                              target_dir = os.path.join('app/src/main/res', subpath)
+                              os.makedirs(target_dir, exist_ok=True)
+                              import shutil
+                              shutil.copy2(src_file, os.path.join(target_dir, f))
+                              print(f'Copied image resource: {f} -> {target_dir}')
 
               # Write guaranteed merged colors.xml (combines base UI colors + project custom colors)
               merged_colors = dict(base_colors)
@@ -476,6 +515,21 @@ jobs:
               print('Wrote clean Standalone AndroidManifest.xml with selected permissions:', permissions_list)
 
           # 6. Decode and apply custom icon (removing adaptive vector icons that override PNGs on Android 8+)
+          if not icon_base64:
+              for root, dirs, files in os.walk('app/src/main/assets/standalone_app'):
+                  for f in files:
+                      fl = f.lower()
+                      if fl in ['icon.png', 'logo.png', 'app_icon.png', 'ic_launcher.png']:
+                          try:
+                              with open(os.path.join(root, f), 'rb') as ifile:
+                                  icon_base64 = base64.b64encode(ifile.read()).decode('utf-8')
+                              print('Auto-detected and loaded project icon:', f)
+                              break
+                          except Exception as e:
+                              print('Error reading project icon:', e)
+                  if icon_base64:
+                      break
+
           if icon_base64:
               try:
                   with open('custom_icon.png', 'wb') as f:
