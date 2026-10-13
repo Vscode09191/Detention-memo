@@ -378,14 +378,35 @@ jobs:
               if custom_manifest:
                   break
 
+          launcher_activity = "com.example.htmleditor.MainActivity" if is_compose else "com.example.htmleditor.StandaloneAppActivity"
+
           if custom_manifest and os.path.exists(custom_manifest):
               with open(custom_manifest, 'r', encoding='utf-8') as cmf:
                   user_manifest = cmf.read()
+
+              # Self-heal 1: AGP 8.0+ strictly forbids package attribute in source AndroidManifest.xml
+              user_manifest = re.sub(r'\s+package\s*=\s*["\'][^"\']*["\']', '', user_manifest)
+
+              # Self-heal 2: Ensure required XML namespaces are present
               if 'xmlns:android=' not in user_manifest:
                   user_manifest = user_manifest.replace('<manifest', '<manifest xmlns:android="http://schemas.android.com/apk/res/android"', 1)
+              if 'xmlns:tools=' not in user_manifest:
+                  user_manifest = user_manifest.replace('<manifest', '<manifest xmlns:tools="http://schemas.android.com/tools"', 1)
+
+              # Self-heal 3: Normalize launcher activity class to matching compiled launcher
+              user_manifest = re.sub(r'android:name\s*=\s*["\'][\w\.]*MainActivity["\']', f'android:name="{launcher_activity}"', user_manifest)
+
+              # Self-heal 4: Ensure launcher activity has android:exported="true" (mandatory since Android 12)
+              if '<intent-filter>' in user_manifest and 'android:exported=' not in user_manifest:
+                  user_manifest = user_manifest.replace('<activity', '<activity android:exported="true"', 1)
+
+              # Self-heal 5: Ensure application has a valid theme
+              if 'android:theme=' not in user_manifest:
+                  user_manifest = user_manifest.replace('<application', '<application android:theme="@style/Theme.HtmlEditor"', 1)
+
               with open('app/src/main/AndroidManifest.xml', 'w', encoding='utf-8') as f:
                   f.write(user_manifest)
-              print('Preserved and applied user custom AndroidManifest.xml from project successfully!')
+              print('Preserved, self-healed, and applied user custom AndroidManifest.xml successfully!')
           else:
               # Fallback to generated manifest with dynamic permissions
               if not permissions_list:
