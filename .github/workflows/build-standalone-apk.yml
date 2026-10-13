@@ -93,6 +93,16 @@ jobs:
           project_zip_b64 = data.get('project_zip_base64', '')
           permissions_list = data.get('permissions', ['INTERNET'])
           project_type = data.get('project_type', 'html')
+          entry_file = data.get('entry_file', 'index.html')
+
+          # Sanitize package_id to prevent any syntax issues in build.gradle
+          if package_id:
+              clean_pkg = re.sub(r'[^a-zA-Z0-9_\.]', '', package_id).lower()
+              pkg_parts = [p for p in clean_pkg.split('.') if p and not p[0].isdigit()]
+              if len(pkg_parts) >= 2:
+                  package_id = '.'.join(pkg_parts)
+              else:
+                  package_id = 'com.app.' + (pkg_parts[0] if pkg_parts else 'standalone')
 
           # 2. Extract Project Assets or HTML into assets/standalone_app/
           os.makedirs('app/src/main/assets/standalone_app', exist_ok=True)
@@ -111,6 +121,24 @@ jobs:
               with open('app/src/main/assets/standalone_app/index.html', 'w', encoding='utf-8') as f:
                   f.write(html_content)
               print('Injected HTML content into assets/standalone_app/index.html')
+
+          # Guarantee index.html exists in assets/standalone_app for HTML builds
+          standalone_dir = 'app/src/main/assets/standalone_app'
+          index_path = os.path.join(standalone_dir, 'index.html')
+          if not os.path.exists(index_path):
+              candidate = os.path.join(standalone_dir, entry_file)
+              if os.path.exists(candidate) and os.path.isfile(candidate):
+                  import shutil
+                  shutil.copy2(candidate, index_path)
+                  print(f'Linked entry file {entry_file} -> index.html')
+              else:
+                  for r, d, fs in os.walk(standalone_dir):
+                      html_candidates = [f for f in fs if f.lower().endswith('.html') or f.lower().endswith('.htm')]
+                      if html_candidates:
+                          import shutil
+                          shutil.copy2(os.path.join(r, html_candidates[0]), index_path)
+                          print(f'Auto-linked HTML entry file {html_candidates[0]} -> index.html')
+                          break
 
           # 2b. If Jetpack Compose project, inject custom Kotlin files and resource files into source set
           has_kt_files = False
@@ -133,18 +161,6 @@ jobs:
               if os.path.exists(editor_dir):
                   shutil.rmtree(editor_dir, ignore_errors=True)
                   print('Cleaned up entire HTML Editor IDE codebase to isolate standalone Compose app')
-          else:
-              # For HTML standalone web apps:
-              # Only StandaloneAppActivity.kt is needed. Remove all other editor tool classes.
-              editor_dir = 'app/src/main/java/com/example/htmleditor'
-              if os.path.exists(editor_dir):
-                  for ef in os.listdir(editor_dir):
-                      if ef != 'StandaloneAppActivity.kt' and os.path.isfile(os.path.join(editor_dir, ef)):
-                          try:
-                              os.remove(os.path.join(editor_dir, ef))
-                              print(f'Cleaned unused editor file for standalone HTML build: {ef}')
-                          except Exception as e:
-                              pass
 
               # Zero-Tampering Engine: copy every Kotlin/Java source file to its declared package folder without altering code!
               for root, dirs, files in os.walk('app/src/main/assets/standalone_app'):
@@ -184,10 +200,12 @@ jobs:
                               if 'import androidx.compose.runtime.setValue' not in code and 'import androidx.compose.runtime.*' not in code:
                                   delegate_imports.append('import androidx.compose.runtime.setValue')
                               if delegate_imports:
+                                  import_block = '\n' + '\n'.join(delegate_imports) + '\n'
                                   if pkg_match:
-                                      code = re.sub(r'(package\s+[\w\.]+\n)', r'\1\n' + '\n'.join(delegate_imports) + '\n', code, count=1)
+                                      pkg_stmt = pkg_match.group(0)
+                                      code = code.replace(pkg_stmt, pkg_stmt + import_block, 1)
                                   else:
-                                      code = '\n'.join(delegate_imports) + '\n' + code
+                                      code = import_block + code
 
                           os.makedirs(os.path.dirname(target_file), exist_ok=True)
                           with open(target_file, 'w', encoding='utf-8') as kf:
@@ -247,135 +265,151 @@ jobs:
                       with open(fb_theme, 'w', encoding='utf-8') as ftf:
                           ftf.write('\n'.join(theme_lines) + '\n')
                       print(f'Created fallback ui/theme/Theme.kt in {tdir}')
+          else:
+              # For HTML standalone web apps:
+              # Only StandaloneAppActivity.kt is needed. Remove all other editor tool classes.
+              editor_dir = 'app/src/main/java/com/example/htmleditor'
+              if os.path.exists(editor_dir):
+                  for ef in os.listdir(editor_dir):
+                      if ef != 'StandaloneAppActivity.kt' and os.path.isfile(os.path.join(editor_dir, ef)):
+                          try:
+                              os.remove(os.path.join(editor_dir, ef))
+                              print(f'Cleaned unused editor file for standalone HTML build: {ef}')
+                          except Exception as e:
+                              pass
 
-              # 2c. Intelligently merge custom res/values XMLs from project without overwriting base app resources
-              base_colors = {
-                  "editor_bg": "#1E1E1E",
-                  "toolbar_bg": "#252526",
-                  "tab_bar_bg": "#181818",
-                  "tab_active_bg": "#1E1E1E",
-                  "tab_inactive_bg": "#252526",
-                  "tab_inactive_text": "#9E9E9E",
-                  "accent": "#4FC3F7",
-                  "accent_color": "#4FC3F7",
-                  "dialog_bg": "#1E1E24",
-                  "white": "#FFFFFF",
-                  "black": "#000000",
-                  "divider": "#3C3C3C"
-              }
+          # 2c. Intelligently merge custom res/values XMLs from project without overwriting base app resources
+          base_colors = {
+              "editor_bg": "#1E1E1E",
+              "toolbar_bg": "#252526",
+              "tab_bar_bg": "#181818",
+              "tab_active_bg": "#1E1E1E",
+              "tab_inactive_bg": "#252526",
+              "tab_inactive_text": "#9E9E9E",
+              "accent": "#4FC3F7",
+              "accent_color": "#4FC3F7",
+              "dialog_bg": "#1E1E24",
+              "white": "#FFFFFF",
+              "black": "#000000",
+              "divider": "#3C3C3C"
+          }
 
-              user_colors = {}
-              user_strings = {}
-              for root, dirs, files in os.walk('app/src/main/assets/standalone_app'):
-                  for f in files:
-                      f_lower = f.lower()
-                      if f_lower == 'colors.xml':
-                          src_file = os.path.join(root, f)
-                          try:
-                              with open(src_file, 'r', encoding='utf-8') as cfile:
-                                  c_content = cfile.read()
-                                  for m in re.finditer(r'<color\s+name=["\']([^"\']+)["\']>([^<]+)</color>', c_content):
-                                      user_colors[m.group(1)] = m.group(2).strip()
-                              print(f'Parsed {len(user_colors)} custom colors from project {f}')
-                          except Exception as e:
-                              print('Error parsing project colors.xml:', e)
-                      elif f_lower == 'strings.xml':
-                          src_file = os.path.join(root, f)
-                          try:
-                              with open(src_file, 'r', encoding='utf-8') as sfile:
-                                  s_content = sfile.read()
-                                  for m in re.finditer(r'<string\s+name=["\']([^"\']+)["\']>([^<]+)</string>', s_content):
-                                      user_strings[m.group(1)] = m.group(2).strip()
-                              print(f'Parsed {len(user_strings)} custom strings from project {f}')
-                          except Exception as e:
-                              print('Error parsing project strings.xml:', e)
-                      elif f_lower in ['themes.xml', 'styles.xml']:
-                          src_file = os.path.join(root, f)
-                          try:
-                              with open(src_file, 'r', encoding='utf-8') as th_file:
-                                  th_content = th_file.read()
-                              with open('app/src/main/res/values/themes.xml', 'r', encoding='utf-8') as base_th:
-                                  current_th = base_th.read()
-                              user_styles = re.findall(r'(<style[\s\S]*?</style>)', th_content)
-                              for ust in user_styles:
-                                  if 'name="Theme.HtmlEditor"' not in ust and ust not in current_th:
-                                      current_th = current_th.replace('</resources>', f'    {ust}\n</resources>')
-                              with open('app/src/main/res/values/themes.xml', 'w', encoding='utf-8') as base_th:
-                                  base_th.write(current_th)
-                              print(f'Merged custom styles from {f} into themes.xml')
-                          except Exception as e:
-                              print('Error merging themes/styles:', e)
-                      elif f.endswith('.xml') and f_lower != 'androidmanifest.xml':
-                          src_file = os.path.join(root, f)
-                          norm_root = root.replace('\\', '/')
-                          try:
-                              with open(src_file, 'r', encoding='utf-8') as sxf:
-                                  content = sxf.read()
-                              target_dir = None
-                              if '/res/' in norm_root:
-                                  subpath = norm_root.split('/res/')[-1]
-                                  if subpath.startswith('values'):
-                                      if '<resources' in content:
-                                          target_dir = os.path.join('app/src/main/res', subpath)
-                                      elif '<adaptive-icon' in content or f_lower.startswith('ic_launcher'):
-                                          target_dir = 'app/src/main/res/mipmap-anydpi-v26'
-                                      else:
-                                          target_dir = 'app/src/main/res/drawable'
-                                  else:
-                                      target_dir = os.path.join('app/src/main/res', subpath)
-                              else:
-                                  if '<adaptive-icon' in content or f_lower.startswith('ic_launcher'):
-                                      target_dir = 'app/src/main/res/mipmap-anydpi-v26'
-                                  elif any(tag in content for tag in ['<vector', '<shape', '<layer-list', '<selector', '<bitmap', '<animated-vector']):
-                                      target_dir = 'app/src/main/res/drawable'
-                                  elif any(tag in content.lower() for tag in ['<layout', '<linearlayout', '<relativelayout', '<framelayout', '<coordinatorlayout']):
-                                      target_dir = 'app/src/main/res/layout'
-                                  elif '<resources' in content:
-                                      target_dir = 'app/src/main/res/values'
-                                  elif any(tag in content for tag in ['<PreferenceScreen', '<network-security-config', '<paths', '<shortcuts']):
-                                      target_dir = 'app/src/main/res/xml'
-
-                              if target_dir:
-                                  os.makedirs(target_dir, exist_ok=True)
-                                  target_file = os.path.join(target_dir, f)
-                                  with open(target_file, 'w', encoding='utf-8') as txf:
-                                      txf.write(content)
-                                  print(f'Safely routed Resource XML: {f} -> {target_dir}')
-                          except Exception as e:
-                              print(f'Error processing XML {f}:', e)
-                      elif f_lower.endswith(('.png', '.webp', '.jpg', '.jpeg')):
-                          src_file = os.path.join(root, f)
-                          norm_root = root.replace('\\', '/')
+          user_colors = {}
+          user_strings = {}
+          for root, dirs, files in os.walk('app/src/main/assets/standalone_app'):
+              for f in files:
+                  f_lower = f.lower()
+                  if f_lower == 'colors.xml':
+                      src_file = os.path.join(root, f)
+                      try:
+                          with open(src_file, 'r', encoding='utf-8') as cfile:
+                              c_content = cfile.read()
+                              for m in re.finditer(r'<color\s+name=["\']([^"\']+)["\']>([^<]+)</color>', c_content):
+                                  user_colors[m.group(1)] = m.group(2).strip()
+                          print(f'Parsed {len(user_colors)} custom colors from project {f}')
+                      except Exception as e:
+                          print('Error parsing project colors.xml:', e)
+                  elif f_lower == 'strings.xml':
+                      src_file = os.path.join(root, f)
+                      try:
+                          with open(src_file, 'r', encoding='utf-8') as sfile:
+                              s_content = sfile.read()
+                              for m in re.finditer(r'<string\s+name=["\']([^"\']+)["\']>([^<]+)</string>', s_content):
+                                  user_strings[m.group(1)] = m.group(2).strip()
+                          print(f'Parsed {len(user_strings)} custom strings from project {f}')
+                      except Exception as e:
+                          print('Error parsing project strings.xml:', e)
+                  elif f_lower in ['themes.xml', 'styles.xml']:
+                      src_file = os.path.join(root, f)
+                      try:
+                          with open(src_file, 'r', encoding='utf-8') as th_file:
+                              th_content = th_file.read()
+                          with open('app/src/main/res/values/themes.xml', 'r', encoding='utf-8') as base_th:
+                              current_th = base_th.read()
+                          user_styles = re.findall(r'(<style[\s\S]*?</style>)', th_content)
+                          for ust in user_styles:
+                              if 'name="Theme.HtmlEditor"' not in ust and ust not in current_th:
+                                  current_th = current_th.replace('</resources>', f'    {ust}\n</resources>')
+                          with open('app/src/main/res/values/themes.xml', 'w', encoding='utf-8') as base_th:
+                              base_th.write(current_th)
+                          print(f'Merged custom styles from {f} into themes.xml')
+                      except Exception as e:
+                          print('Error merging themes/styles:', e)
+                  elif f.endswith('.xml') and f_lower != 'androidmanifest.xml':
+                      src_file = os.path.join(root, f)
+                      norm_root = root.replace('\\', '/')
+                      try:
+                          with open(src_file, 'r', encoding='utf-8') as sxf:
+                              content = sxf.read()
+                          target_dir = None
                           if '/res/' in norm_root:
                               subpath = norm_root.split('/res/')[-1]
-                              target_dir = os.path.join('app/src/main/res', subpath)
+                              if subpath.startswith('values'):
+                                  if '<resources' in content:
+                                      target_dir = os.path.join('app/src/main/res', subpath)
+                                  elif '<adaptive-icon' in content or f_lower.startswith('ic_launcher'):
+                                      target_dir = 'app/src/main/res/mipmap-anydpi-v26'
+                                  else:
+                                      target_dir = 'app/src/main/res/drawable'
+                              else:
+                                  target_dir = os.path.join('app/src/main/res', subpath)
+                          else:
+                              if '<adaptive-icon' in content or f_lower.startswith('ic_launcher'):
+                                  target_dir = 'app/src/main/res/mipmap-anydpi-v26'
+                              elif any(tag in content for tag in ['<vector', '<shape', '<layer-list', '<selector', '<bitmap', '<animated-vector']):
+                                  target_dir = 'app/src/main/res/drawable'
+                              elif any(tag in content.lower() for tag in ['<layout', '<linearlayout', '<relativelayout', '<framelayout', '<coordinatorlayout']):
+                                  target_dir = 'app/src/main/res/layout'
+                              elif '<resources' in content:
+                                  target_dir = 'app/src/main/res/values'
+                              elif any(tag in content for tag in ['<PreferenceScreen', '<network-security-config', '<paths', '<shortcuts']):
+                                  target_dir = 'app/src/main/res/xml'
+
+                          if target_dir:
                               os.makedirs(target_dir, exist_ok=True)
-                              import shutil
-                              shutil.copy2(src_file, os.path.join(target_dir, f))
-                              print(f'Copied image resource: {f} -> {target_dir}')
+                              target_file = os.path.join(target_dir, f)
+                              with open(target_file, 'w', encoding='utf-8') as txf:
+                                  txf.write(content)
+                              print(f'Safely routed Resource XML: {f} -> {target_dir}')
+                      except Exception as e:
+                          print(f'Error processing XML {f}:', e)
+                  elif f_lower.endswith(('.png', '.webp', '.jpg', '.jpeg')):
+                      src_file = os.path.join(root, f)
+                      norm_root = root.replace('\\', '/')
+                      if '/res/' in norm_root:
+                          subpath = norm_root.split('/res/')[-1]
+                          target_dir = os.path.join('app/src/main/res', subpath)
+                          os.makedirs(target_dir, exist_ok=True)
+                          import shutil
+                          shutil.copy2(src_file, os.path.join(target_dir, f))
+                          print(f'Copied image resource: {f} -> {target_dir}')
 
-              # Write guaranteed merged colors.xml (combines base UI colors + project custom colors)
-              merged_colors = dict(base_colors)
-              merged_colors.update(user_colors)
-              color_lines = ['<?xml version="1.0" encoding="utf-8"?>', '<resources>']
-              for cname, cval in merged_colors.items():
-                  color_lines.append(f'    <color name="{cname}">{cval}</color>')
-              color_lines.append('</resources>')
-              os.makedirs('app/src/main/res/values', exist_ok=True)
-              with open('app/src/main/res/values/colors.xml', 'w', encoding='utf-8') as f:
-                  f.write('\n'.join(color_lines) + '\n')
-              print('Wrote safe merged colors.xml with', len(merged_colors), 'colors')
+          # Write guaranteed merged colors.xml (combines base UI colors + project custom colors)
+          merged_colors = dict(base_colors)
+          merged_colors.update(user_colors)
+          color_lines = ['<?xml version="1.0" encoding="utf-8"?>', '<resources>']
+          for cname, cval in merged_colors.items():
+              color_lines.append(f'    <color name="{cname}">{cval}</color>')
+          color_lines.append('</resources>')
+          os.makedirs('app/src/main/res/values', exist_ok=True)
+          with open('app/src/main/res/values/colors.xml', 'w', encoding='utf-8') as f:
+              f.write('\n'.join(color_lines) + '\n')
+          print('Wrote safe merged colors.xml with', len(merged_colors), 'colors')
 
-          # 3. Set App Name and merged strings in strings.xml
+          # 3. Set App Name and merged strings in strings.xml with XML escaping
+          def escape_xml_val(val):
+              s = str(val).replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
+              return s.replace("'", "\\'").replace('"', '\\"')
+
           merged_strings = dict(user_strings)
           merged_strings['app_name'] = app_name
           string_lines = ['<?xml version="1.0" encoding="utf-8"?>', '<resources>']
           for sname, sval in merged_strings.items():
-              string_lines.append(f'    <string name="{sname}">{sval}</string>')
+              string_lines.append(f'    <string name="{sname}">{escape_xml_val(sval)}</string>')
           string_lines.append('</resources>')
           with open('app/src/main/res/values/strings.xml', 'w', encoding='utf-8') as f:
               f.write('\n'.join(string_lines) + '\n')
-          print('Updated app_name to:', app_name, 'and preserved custom strings')
+          print('Updated app_name to:', app_name, 'and safely escaped strings')
 
           # 4. Update Package ID (applicationId) & Jetpack Compose Configuration in app/build.gradle
           bg_path = 'app/build.gradle'
