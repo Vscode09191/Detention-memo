@@ -189,44 +189,46 @@ jobs:
               fallback_theme = 'app/src/main/java/com/example/htmleditor/ui/theme/Theme.kt'
               if not os.path.exists(fallback_theme):
                   os.makedirs(os.path.dirname(fallback_theme), exist_ok=True)
+                  theme_lines = [
+                      "package com.example.htmleditor.ui.theme",
+                      "",
+                      "import androidx.compose.foundation.isSystemInDarkTheme",
+                      "import androidx.compose.material3.*",
+                      "import androidx.compose.runtime.Composable",
+                      "import androidx.compose.ui.graphics.Color",
+                      "import androidx.compose.ui.text.TextStyle",
+                      "import androidx.compose.ui.text.font.FontFamily",
+                      "import androidx.compose.ui.text.font.FontWeight",
+                      "import androidx.compose.ui.unit.sp",
+                      "",
+                      "val Purple80 = Color(0xFFD0BCFF)",
+                      "val PurpleGrey80 = Color(0xFFCCC2DC)",
+                      "val Pink80 = Color(0xFFEFB8C8)",
+                      "val Purple40 = Color(0xFF6650a4)",
+                      "val PurpleGrey40 = Color(0xFF625b71)",
+                      "val Pink40 = Color(0xFF7D5260)",
+                      "",
+                      "val Typography = Typography(",
+                      "    bodyLarge = TextStyle(",
+                      "        fontFamily = FontFamily.Default,",
+                      "        fontWeight = FontWeight.Normal,",
+                      "        fontSize = 16.sp,",
+                      "        lineHeight = 24.sp,",
+                      "        letterSpacing = 0.5.sp",
+                      "    )",
+                      ")",
+                      "",
+                      "private val DarkColorScheme = darkColorScheme(primary = Purple80, secondary = PurpleGrey80, tertiary = Pink80)",
+                      "private val LightColorScheme = lightColorScheme(primary = Purple40, secondary = PurpleGrey40, tertiary = Pink40)",
+                      "",
+                      "@Composable",
+                      "fun AppTheme(darkTheme: Boolean = isSystemInDarkTheme(), content: @Composable () -> Unit) {",
+                      "    val colorScheme = if (darkTheme) DarkColorScheme else LightColorScheme",
+                      "    MaterialTheme(colorScheme = colorScheme, typography = Typography, content = content)",
+                      "}"
+                  ]
                   with open(fallback_theme, 'w', encoding='utf-8') as ftf:
-                      ftf.write('''package com.example.htmleditor.ui.theme
-
-import androidx.compose.foundation.isSystemInDarkTheme
-import androidx.compose.material3.*
-import androidx.compose.runtime.Composable
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.text.TextStyle
-import androidx.compose.ui.text.font.FontFamily
-import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.unit.sp
-
-val Purple80 = Color(0xFFD0BCFF)
-val PurpleGrey80 = Color(0xFFCCC2DC)
-val Pink80 = Color(0xFFEFB8C8)
-val Purple40 = Color(0xFF6650a4)
-val PurpleGrey40 = Color(0xFF625b71)
-val Pink40 = Color(0xFF7D5260)
-
-val Typography = Typography(
-    bodyLarge = TextStyle(
-        fontFamily = FontFamily.Default,
-        fontWeight = FontWeight.Normal,
-        fontSize = 16.sp,
-        lineHeight = 24.sp,
-        letterSpacing = 0.5.sp
-    )
-)
-
-private val DarkColorScheme = darkColorScheme(primary = Purple80, secondary = PurpleGrey80, tertiary = Pink80)
-private val LightColorScheme = lightColorScheme(primary = Purple40, secondary = PurpleGrey40, tertiary = Pink40)
-
-@Composable
-fun AppTheme(darkTheme: Boolean = isSystemInDarkTheme(), content: @Composable () -> Unit) {
-    val colorScheme = if (darkTheme) DarkColorScheme else LightColorScheme
-    MaterialTheme(colorScheme = colorScheme, typography = Typography, content = content)
-}
-''')
+                      ftf.write('\n'.join(theme_lines) + '\n')
                   print('Created fallback ui/theme/Theme.kt with AppTheme')
 
               # 2c. Intelligently merge custom res/values XMLs from project without overwriting base app resources
