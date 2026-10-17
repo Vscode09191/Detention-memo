@@ -284,60 +284,25 @@ jobs:
           os.makedirs(layout_dir, exist_ok=True)
           layout_path = os.path.join(layout_dir, 'activity_standalone_app.xml')
           if not os.path.exists(layout_path) or os.path.getsize(layout_path) == 0:
-              default_layout = '''<?xml version="1.0" encoding="utf-8"?>
-<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
-    android:layout_width="match_parent"
-    android:layout_height="match_parent"
-    android:background="#000000">
-
-    <WebView
-        android:id="@+id/standaloneWebView"
-        android:layout_width="match_parent"
-        android:layout_height="match_parent" />
-
-    <ProgressBar
-        android:id="@+id/standaloneProgress"
-        style="?android:attr/progressBarStyleHorizontal"
-        android:layout_width="match_parent"
-        android:layout_height="3dp"
-        android:layout_gravity="top"
-        android:indeterminate="false"
-        android:progressTint="#4FC3F7"
-        android:visibility="gone" />
-
-    <LinearLayout
-        android:id="@+id/splashContainer"
-        android:layout_width="match_parent"
-        android:layout_height="match_parent"
-        android:orientation="vertical"
-        android:gravity="center"
-        android:background="#1E1E1E">
-
-        <ImageView
-            android:id="@+id/splashLogo"
-            android:layout_width="100dp"
-            android:layout_height="100dp"
-            android:src="@mipmap/ic_launcher"
-            android:contentDescription="App Logo" />
-
-        <TextView
-            android:id="@+id/splashTitle"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="16dp"
-            android:text="@string/app_name"
-            android:textColor="#FFFFFF"
-            android:textSize="18sp"
-            android:textStyle="bold" />
-    </LinearLayout>
-
-</FrameLayout>
-'''
+              default_xml = (
+                  '<?xml version="1.0" encoding="utf-8"?>\n'
+                  '<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"\n'
+                  '    android:layout_width="match_parent"\n'
+                  '    android:layout_height="match_parent"\n'
+                  '    android:background="#000000">\n'
+                  '    <WebView android:id="@+id/standaloneWebView" android:layout_width="match_parent" android:layout_height="match_parent" />\n'
+                  '    <ProgressBar android:id="@+id/standaloneProgress" style="?android:attr/progressBarStyleHorizontal" android:layout_width="match_parent" android:layout_height="3dp" android:layout_gravity="top" android:indeterminate="false" android:progressTint="#4FC3F7" android:visibility="gone" />\n'
+                  '    <LinearLayout android:id="@+id/splashContainer" android:layout_width="match_parent" android:layout_height="match_parent" android:orientation="vertical" android:gravity="center" android:background="#1E1E1E">\n'
+                  '        <ImageView android:id="@+id/splashLogo" android:layout_width="100dp" android:layout_height="100dp" android:src="@mipmap/ic_launcher" android:contentDescription="App Logo" />\n'
+                  '        <TextView android:id="@+id/splashTitle" android:layout_width="wrap_content" android:layout_height="wrap_content" android:layout_marginTop="16dp" android:text="@string/app_name" android:textColor="#FFFFFF" android:textSize="18sp" android:textStyle="bold" />\n'
+                  '    </LinearLayout>\n'
+                  '</FrameLayout>\n'
+              )
               with open(layout_path, 'w', encoding='utf-8') as lf:
-                  lf.write(default_layout)
+                  lf.write(default_xml)
               print('Generated default activity_standalone_app.xml')
 
-          # Apply splash screen customization to XML
+          # Apply splash screen customization
           if os.path.exists(layout_path):
               with open(layout_path, 'r', encoding='utf-8') as f:
                   layout = f.read()
@@ -355,201 +320,25 @@ jobs:
               with open(standalone_kt, 'r', encoding='utf-8') as skf:
                   s_code = skf.read()
               if 'R.layout.activity_standalone_app' in s_code or 'R.id.standaloneWebView' in s_code:
-                  programmatic_code = '''package com.example.htmleditor
-
-import android.annotation.SuppressLint
-import android.graphics.Color
-import android.graphics.Typeface
-import android.os.Bundle
-import android.view.Gravity
-import android.view.View
-import android.view.ViewGroup
-import android.view.animation.AlphaAnimation
-import android.webkit.WebChromeClient
-import android.webkit.WebView
-import android.webkit.WebViewClient
-import android.widget.FrameLayout
-import android.widget.ImageView
-import android.widget.LinearLayout
-import android.widget.ProgressBar
-import android.widget.TextView
-import androidx.activity.OnBackPressedCallback
-import androidx.appcompat.app.AppCompatActivity
-
-class StandaloneAppActivity : AppCompatActivity() {
-
-    private lateinit var webView: WebView
-    private lateinit var splashContainer: LinearLayout
-    private lateinit var progressBar: ProgressBar
-    private var splashDismissed = false
-
-    @SuppressLint("SetJavaScriptEnabled")
-    override fun onCreate(savedInstanceState: Bundle?) {
-        super.onCreate(savedInstanceState)
-
-        val density = resources.displayMetrics.density
-
-        val rootLayout = FrameLayout(this).apply {
-            layoutParams = ViewGroup.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.MATCH_PARENT
-            )
-            setBackgroundColor(Color.BLACK)
-        }
-
-        webView = WebView(this).apply {
-            layoutParams = FrameLayout.LayoutParams(
-                FrameLayout.LayoutParams.MATCH_PARENT,
-                FrameLayout.LayoutParams.MATCH_PARENT
-            )
-        }
-        rootLayout.addView(webView)
-
-        progressBar = ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal).apply {
-            layoutParams = FrameLayout.LayoutParams(
-                FrameLayout.LayoutParams.MATCH_PARENT,
-                (3 * density).toInt()
-            ).apply {
-                gravity = Gravity.TOP
-            }
-            isIndeterminate = false
-            progressTintList = android.content.res.ColorStateList.valueOf(Color.parseColor("#4FC3F7"))
-            visibility = View.GONE
-        }
-        rootLayout.addView(progressBar)
-
-        val splashBgColor = if ("''' + splash_color.upper() + '''" == "#FFFFFF") Color.WHITE else Color.parseColor("#1E1E1E")
-        val splashTextColor = if ("''' + splash_color.upper() + '''" == "#FFFFFF") Color.parseColor("#111111") else Color.WHITE
-
-        splashContainer = LinearLayout(this).apply {
-            layoutParams = FrameLayout.LayoutParams(
-                FrameLayout.LayoutParams.MATCH_PARENT,
-                FrameLayout.LayoutParams.MATCH_PARENT
-            )
-            orientation = LinearLayout.VERTICAL
-            gravity = Gravity.CENTER
-            setBackgroundColor(splashBgColor)
-        }
-
-        val splashIcon = ImageView(this).apply {
-            val iconSize = (100 * density).toInt()
-            layoutParams = LinearLayout.LayoutParams(iconSize, iconSize)
-            try {
-                setImageDrawable(packageManager.getApplicationIcon(applicationInfo))
-            } catch (e: Exception) {}
-            contentDescription = "App Logo"
-        }
-        splashContainer.addView(splashIcon)
-
-        val splashTitle = TextView(this).apply {
-            layoutParams = LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.WRAP_CONTENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT
-            ).apply {
-                topMargin = (16 * density).toInt()
-            }
-            text = try {
-                packageManager.getApplicationLabel(applicationInfo).toString()
-            } catch (e: Exception) {
-                "App"
-            }
-            setTextColor(splashTextColor)
-            textSize = 18f
-            typeface = Typeface.DEFAULT_BOLD
-        }
-        splashContainer.addView(splashTitle)
-
-        rootLayout.addView(splashContainer)
-
-        setContentView(rootLayout)
-
-        webView.settings.javaScriptEnabled = true
-        webView.settings.domStorageEnabled = true
-        webView.settings.databaseEnabled = true
-        webView.settings.allowFileAccess = true
-        webView.settings.allowFileAccessFromFileURLs = true
-        webView.settings.allowUniversalAccessFromFileURLs = true
-        webView.settings.loadWithOverviewMode = true
-        webView.settings.useWideViewPort = true
-        webView.settings.mediaPlaybackRequiresUserGesture = false
-        webView.settings.setGeolocationEnabled(true)
-        webView.settings.mixedContentMode = android.webkit.WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
-
-        webView.webChromeClient = object : WebChromeClient() {
-            override fun onProgressChanged(view: WebView?, newProgress: Int) {
-                progressBar.progress = newProgress
-                if (newProgress >= 100) {
-                    progressBar.visibility = View.GONE
-                    dismissSplash()
-                } else {
-                    progressBar.visibility = View.VISIBLE
-                }
-            }
-
-            override fun onGeolocationPermissionsShowPrompt(
-                origin: String?,
-                callback: android.webkit.GeolocationPermissions.Callback?
-            ) {
-                callback?.invoke(origin, true, false)
-            }
-
-            override fun onPermissionRequest(request: android.webkit.PermissionRequest?) {
-                request?.let { req ->
-                    runOnUiThread {
-                        req.grant(req.resources)
-                    }
-                }
-            }
-        }
-
-        webView.webViewClient = object : WebViewClient() {
-            override fun onPageFinished(view: WebView?, url: String?) {
-                dismissSplash()
-            }
-        }
-
-        onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
-            override fun handleOnBackPressed() {
-                if (webView.canGoBack()) {
-                    webView.goBack()
-                } else {
-                    finish()
-                }
-            }
-        })
-
-        val localHtml = java.io.File(filesDir, "standalone_app/index.html")
-        if (localHtml.exists()) {
-            webView.loadUrl("file://${localHtml.absolutePath}")
-        } else {
-            webView.loadUrl("file:///android_asset/standalone_app/index.html")
-        }
-
-        splashContainer.postDelayed({ dismissSplash() }, 3000)
-    }
-
-    private fun dismissSplash() {
-        if (!splashDismissed) {
-            splashDismissed = true
-            val fadeOut = AlphaAnimation(1f, 0f).apply {
-                duration = 400
-                setAnimationListener(object : android.view.animation.Animation.AnimationListener {
-                    override fun onAnimationStart(a: android.view.animation.Animation?) {}
-                    override fun onAnimationEnd(a: android.view.animation.Animation?) {
-                        splashContainer.visibility = View.GONE
-                    }
-                    override fun onAnimationRepeat(a: android.view.animation.Animation?) {}
-                })
-            }
-            splashContainer.startAnimation(fadeOut)
-        }
-    }
-}
-'''
+                  s_code = s_code.replace(
+                      'setContentView(R.layout.activity_standalone_app)',
+                      'val lRes = resources.getIdentifier("activity_standalone_app", "layout", packageName)\n        if (lRes != 0) setContentView(lRes)'
+                  )
+                  s_code = s_code.replace(
+                      'webView = findViewById(R.id.standaloneWebView)',
+                      'val wId = resources.getIdentifier("standaloneWebView", "id", packageName)\n        webView = if (wId != 0) findViewById(wId) else android.webkit.WebView(this)'
+                  )
+                  s_code = s_code.replace(
+                      'splashContainer = findViewById(R.id.splashContainer)',
+                      'val sId = resources.getIdentifier("splashContainer", "id", packageName)\n        splashContainer = if (sId != 0) findViewById(sId) else android.widget.LinearLayout(this)'
+                  )
+                  s_code = s_code.replace(
+                      'progressBar = findViewById(R.id.standaloneProgress)',
+                      'val pId = resources.getIdentifier("standaloneProgress", "id", packageName)\n        progressBar = if (pId != 0) findViewById(pId) else android.widget.ProgressBar(this)'
+                  )
                   with open(standalone_kt, 'w', encoding='utf-8') as skf:
-                      skf.write(programmatic_code)
-                  print('Self-healed StandaloneAppActivity.kt with robust programmatic layout!')
-
+                      skf.write(s_code)
+                  print('Self-healed StandaloneAppActivity.kt against unresolved R references')
 
           # 8. Export fingerprint to GITHUB_ENV
           if 'GITHUB_ENV' in os.environ and fingerprint:
