@@ -150,14 +150,26 @@ jobs:
                           f.write('<!DOCTYPE html><html><head><title>App</title></head><body><h1>Welcome</h1></body></html>')
                       print('Created default fallback index.html')
 
-          # 2b. If Jetpack Compose project, inject custom Kotlin files into source set
+          # 2b. Clean and isolate Kotlin source tree for Standalone build
           is_compose = (project_type == 'compose')
+          src_dir = 'app/src/main/java/com/example/htmleditor'
+
           if is_compose:
+              # For Compose: remove IDE editor files that are not part of standalone app
+              for f in ['StandaloneApkBuilder.kt', 'ProjectManager.kt', 'HtmlCombiner.kt', 'EditorTabAdapter.kt', 'FileListAdapter.kt', 'GitHubApiClient.kt', 'OnboardingActivity.kt', 'OnboardingAdapter.kt', 'SplashActivity.kt', 'PreviewActivity.kt']:
+                  p = os.path.join(src_dir, f)
+                  if os.path.exists(p):
+                      try:
+                          os.remove(p)
+                          print(f'Pruned IDE file for Compose: {f}')
+                      except Exception as e:
+                          print(e)
+
               for root, dirs, files in os.walk('app/src/main/assets/standalone_app'):
                   for f in files:
                       if f.endswith('.kt'):
                           src_file = os.path.join(root, f)
-                          target_file = os.path.join('app/src/main/java/com/example/htmleditor', f)
+                          target_file = os.path.join(src_dir, f)
                           with open(src_file, 'r', encoding='utf-8') as kf:
                               code = kf.read()
                           code = re.sub(r'package\s+[\w\.]+', 'package com.example.htmleditor', code, count=1)
@@ -166,6 +178,18 @@ jobs:
                           with open(target_file, 'w', encoding='utf-8') as kf:
                               kf.write(code)
                           print(f'Injected Compose source file: {f}')
+          else:
+              # For HTML standalone web APK: ONLY StandaloneAppActivity is needed.
+              # Prune all other IDE Kotlin files (MainActivity, StandaloneApkBuilder, etc.)
+              # so outdated/broken IDE files in the repository never block standalone APK build.
+              if os.path.exists(src_dir):
+                  for f in os.listdir(src_dir):
+                      if f != 'StandaloneAppActivity.kt' and f.endswith('.kt'):
+                          try:
+                              os.remove(os.path.join(src_dir, f))
+                              print(f'Pruned unused IDE source file: {f}')
+                          except Exception as e:
+                              print(f'Could not remove {f}: {e}')
 
           # 3. Set App Name in strings.xml
           os.makedirs('app/src/main/res/values', exist_ok=True)
