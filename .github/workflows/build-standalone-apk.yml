@@ -95,22 +95,57 @@ jobs:
           project_type = data.get('project_type', 'html')
 
           # 2. Extract Project Assets or HTML into assets/standalone_app/
-          os.makedirs('app/src/main/assets/standalone_app', exist_ok=True)
+          target_assets_dir = 'app/src/main/assets/standalone_app'
+          os.makedirs(target_assets_dir, exist_ok=True)
+          entry_file = data.get('entry_file', '').replace('\\', '/').strip('/')
+
           if project_zip_b64:
               import io, zipfile
               try:
                   zip_bytes = base64.b64decode(project_zip_b64)
                   with zipfile.ZipFile(io.BytesIO(zip_bytes)) as z:
-                      z.extractall('app/src/main/assets/standalone_app')
+                      z.extractall(target_assets_dir)
                   print('Successfully unpacked entire project files into assets/standalone_app!')
               except Exception as e:
                   print('Error extracting project ZIP:', e)
-                  with open('app/src/main/assets/standalone_app/index.html', 'w', encoding='utf-8') as f:
-                      f.write(html_content)
-          else:
-              with open('app/src/main/assets/standalone_app/index.html', 'w', encoding='utf-8') as f:
-                  f.write(html_content)
-              print('Injected HTML content into assets/standalone_app/index.html')
+
+          # Auto-flatten if all extracted files are inside a single parent folder
+          entries = os.listdir(target_assets_dir)
+          if len(entries) == 1 and os.path.isdir(os.path.join(target_assets_dir, entries[0])):
+              single_sub = os.path.join(target_assets_dir, entries[0])
+              for item in os.listdir(single_sub):
+                  shutil.move(os.path.join(single_sub, item), target_assets_dir)
+              shutil.rmtree(single_sub, ignore_errors=True)
+              print('Flattened nested project directory')
+
+          # Guarantee index.html exists and is never missing
+          index_file_path = os.path.join(target_assets_dir, 'index.html')
+          if not os.path.exists(index_file_path) or os.path.getsize(index_file_path) == 0:
+              # Try copy from entry_file if specified
+              if entry_file and os.path.exists(os.path.join(target_assets_dir, entry_file)):
+                  shutil.copy2(os.path.join(target_assets_dir, entry_file), index_file_path)
+                  print(f'Copied entry file {entry_file} to index.html')
+              else:
+                  # Find any .html/.htm file in target_assets_dir or subfolders
+                  found_html = None
+                  for root, _, files in os.walk(target_assets_dir):
+                      for f in files:
+                          if f.lower().endswith('.html') or f.lower().endswith('.htm'):
+                              found_html = os.path.join(root, f)
+                              break
+                      if found_html:
+                          break
+                  if found_html and os.path.exists(found_html):
+                      shutil.copy2(found_html, index_file_path)
+                      print(f'Found and copied {found_html} to index.html')
+                  elif html_content and len(html_content.strip()) > 0:
+                      with open(index_file_path, 'w', encoding='utf-8') as f:
+                          f.write(html_content)
+                      print('Injected html_content into index.html')
+                  else:
+                      with open(index_file_path, 'w', encoding='utf-8') as f:
+                          f.write('<!DOCTYPE html><html><head><title>App</title></head><body><h1>Welcome</h1></body></html>')
+                      print('Created default fallback index.html')
 
           # 2b. If Jetpack Compose project, inject custom Kotlin files into source set
           is_compose = (project_type == 'compose')
