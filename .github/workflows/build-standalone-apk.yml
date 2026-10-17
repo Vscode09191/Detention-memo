@@ -90,12 +90,44 @@ jobs:
           html_content = data.get('html_content', '<h1>Hello World</h1>')
           icon_base64 = data.get('icon_base64', '')
           fingerprint = data.get('fingerprint', '')
+          project_zip_b64 = data.get('project_zip_base64', '')
+          permissions_list = data.get('permissions', ['INTERNET'])
+          project_type = data.get('project_type', 'html')
 
-          # 2. Inject HTML into assets/standalone_app/index.html
+          # 2. Extract Project Assets or HTML into assets/standalone_app/
           os.makedirs('app/src/main/assets/standalone_app', exist_ok=True)
-          with open('app/src/main/assets/standalone_app/index.html', 'w', encoding='utf-8') as f:
-              f.write(html_content)
-          print('Injected HTML content into assets/standalone_app/index.html')
+          if project_zip_b64:
+              import io, zipfile
+              try:
+                  zip_bytes = base64.b64decode(project_zip_b64)
+                  with zipfile.ZipFile(io.BytesIO(zip_bytes)) as z:
+                      z.extractall('app/src/main/assets/standalone_app')
+                  print('Successfully unpacked entire project files into assets/standalone_app!')
+              except Exception as e:
+                  print('Error extracting project ZIP:', e)
+                  with open('app/src/main/assets/standalone_app/index.html', 'w', encoding='utf-8') as f:
+                      f.write(html_content)
+          else:
+              with open('app/src/main/assets/standalone_app/index.html', 'w', encoding='utf-8') as f:
+                  f.write(html_content)
+              print('Injected HTML content into assets/standalone_app/index.html')
+
+          # 2b. If Jetpack Compose project, inject custom Kotlin files into source set
+          is_compose = (project_type == 'compose')
+          if is_compose:
+              for root, dirs, files in os.walk('app/src/main/assets/standalone_app'):
+                  for f in files:
+                      if f.endswith('.kt'):
+                          src_file = os.path.join(root, f)
+                          target_file = os.path.join('app/src/main/java/com/example/htmleditor', f)
+                          with open(src_file, 'r', encoding='utf-8') as kf:
+                              code = kf.read()
+                          code = re.sub(r'package\s+[\w\.]+', 'package com.example.htmleditor', code, count=1)
+                          code = code.replace('horizontalAlignment = Alignment.CenterVertically', 'horizontalAlignment = Alignment.CenterHorizontally')
+                          os.makedirs(os.path.dirname(target_file), exist_ok=True)
+                          with open(target_file, 'w', encoding='utf-8') as kf:
+                              kf.write(code)
+                          print(f'Injected Compose source file: {f}')
 
           # 3. Set App Name in strings.xml
           os.makedirs('app/src/main/res/values', exist_ok=True)
@@ -103,25 +135,85 @@ jobs:
               f.write(f'<resources>\n    <string name="app_name">{app_name}</string>\n</resources>\n')
           print('Updated app_name to:', app_name)
 
-          # 4. Update Package ID (applicationId) in app/build.gradle
-          if package_id and package_id != 'com.example.htmleditor':
-              bg_path = 'app/build.gradle'
-              if os.path.exists(bg_path):
-                  with open(bg_path, 'r', encoding='utf-8') as f:
-                      bg = f.read()
+          # 4. Update Package ID (applicationId) & Jetpack Compose Configuration in app/build.gradle
+          bg_path = 'app/build.gradle'
+          if os.path.exists(bg_path):
+              with open(bg_path, 'r', encoding='utf-8') as f:
+                  bg = f.read()
+
+              if package_id and package_id != 'com.example.htmleditor':
                   bg = re.sub(r'applicationId\s+["\'][^"\']+["\']', f'applicationId "{package_id}"', bg)
-                  with open(bg_path, 'w', encoding='utf-8') as f:
-                      f.write(bg)
                   print('Updated package ID to:', package_id)
 
-          # 5. Overwrite AndroidManifest.xml with StandaloneAppActivity as the ONLY MAIN LAUNCHER!
+              if is_compose:
+                  # Enable compose buildFeature
+                  if 'compose true' not in bg:
+                      if 'buildFeatures {' in bg:
+                          bg = bg.replace('buildFeatures {', 'buildFeatures {\n        compose true')
+                      else:
+                          bg = bg.replace('android {', 'android {\n    buildFeatures {\n        compose true\n    }')
+
+                  # Add composeOptions
+                  if 'composeOptions' not in bg:
+                      bg = bg.replace('buildFeatures {', "composeOptions {\n        kotlinCompilerExtensionVersion '1.5.14'\n    }\n    buildFeatures {")
+
+                  # Add Jetpack Compose dependencies
+                  compose_deps = (
+                      "\n    // Jetpack Compose dependencies\n"
+                      "    implementation 'androidx.activity:activity-compose:1.9.0'\n"
+                      "    implementation platform('androidx.compose:compose-bom:2024.04.01')\n"
+                      "    implementation 'androidx.compose.ui:ui'\n"
+                      "    implementation 'androidx.compose.ui:ui-graphics'\n"
+                      "    implementation 'androidx.compose.ui:ui-tooling-preview'\n"
+                      "    implementation 'androidx.compose.material3:material3'\n"
+                  )
+                  if 'androidx.compose' not in bg:
+                      bg = bg.replace('dependencies {', 'dependencies {' + compose_deps)
+
+              with open(bg_path, 'w', encoding='utf-8') as f:
+                  f.write(bg)
+              print('Configured app/build.gradle (is_compose:', is_compose, ')')
+
+          # 5. Overwrite AndroidManifest.xml with dynamic permissions and appropriate Activity
+          if not permissions_list:
+              permissions_list = ['INTERNET']
+
+          perm_lines = []
+          feat_lines = []
+
+          if 'INTERNET' in permissions_list:
+              perm_lines.append('    <uses-permission android:name="android.permission.INTERNET" />')
+              perm_lines.append('    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />')
+
+          if 'LOCATION' in permissions_list:
+              perm_lines.append('    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />')
+              perm_lines.append('    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />')
+              feat_lines.append('    <uses-feature android:name="android.hardware.location.gps" android:required="false" />')
+
+          if 'CAMERA' in permissions_list:
+              perm_lines.append('    <uses-permission android:name="android.permission.CAMERA" />')
+              feat_lines.append('    <uses-feature android:name="android.hardware.camera" android:required="false" />')
+              feat_lines.append('    <uses-feature android:name="android.hardware.camera.autofocus" android:required="false" />')
+
+          if 'AUDIO' in permissions_list:
+              perm_lines.append('    <uses-permission android:name="android.permission.RECORD_AUDIO" />')
+              perm_lines.append('    <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />')
+              feat_lines.append('    <uses-feature android:name="android.hardware.microphone" android:required="false" />')
+
+          if 'STORAGE' in permissions_list:
+              perm_lines.append('    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="32" />')
+              perm_lines.append('    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" android:maxSdkVersion="29" />')
+              perm_lines.append('    <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />')
+              perm_lines.append('    <uses-permission android:name="android.permission.READ_MEDIA_AUDIO" />')
+
+          launcher_activity = "com.example.htmleditor.MainActivity" if is_compose else "com.example.htmleditor.StandaloneAppActivity"
+
           manifest_lines = [
               '<?xml version="1.0" encoding="utf-8"?>',
               '<manifest xmlns:android="http://schemas.android.com/apk/res/android"',
               '    xmlns:tools="http://schemas.android.com/tools">',
-              '',
-              '    <uses-permission android:name="android.permission.INTERNET" />',
-              '    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />',
+              ''
+          ] + perm_lines + [''] + feat_lines + [
               '',
               '    <application',
               '        android:allowBackup="true"',
@@ -132,22 +224,22 @@ jobs:
               '        android:usesCleartextTraffic="true"',
               '        tools:targetApi="34">',
               '',
-              '        <activity',
-              '            android:name="com.example.htmleditor.StandaloneAppActivity"',
-              '            android:exported="true"',
-              '            android:configChanges="orientation|screenSize|keyboardHidden">',
-              '            <intent-filter>',
-              '                <action android:name="android.intent.action.MAIN" />',
-              '                <category android:name="android.intent.category.LAUNCHER" />',
-              '            </intent-filter>',
-              '        </activity>',
+              f'        <activity',
+              f'            android:name="{launcher_activity}"',
+              f'            android:exported="true"',
+              f'            android:configChanges="orientation|screenSize|keyboardHidden">',
+              f'            <intent-filter>',
+              f'                <action android:name="android.intent.action.MAIN" />',
+              f'                <category android:name="android.intent.category.LAUNCHER" />',
+              f'            </intent-filter>',
+              f'        </activity>',
               '',
               '    </application>',
               '</manifest>'
           ]
           with open('app/src/main/AndroidManifest.xml', 'w', encoding='utf-8') as f:
               f.write('\n'.join(manifest_lines) + '\n')
-          print('Wrote clean Standalone AndroidManifest.xml with StandaloneAppActivity as main launcher')
+          print('Wrote clean Standalone AndroidManifest.xml with selected permissions:', permissions_list)
 
           # 6. Decode and apply custom icon (removing adaptive vector icons that override PNGs on Android 8+)
           if icon_base64:
@@ -187,17 +279,66 @@ jobs:
               except Exception as e:
                   print('Could not process custom icon:', e)
 
-          # 7. Customize splash screen color
-          layout_path = 'app/src/main/res/layout/activity_standalone_app.xml'
+          # 7. Guarantee layout directory and activity_standalone_app.xml exist
+          layout_dir = 'app/src/main/res/layout'
+          os.makedirs(layout_dir, exist_ok=True)
+          layout_path = os.path.join(layout_dir, 'activity_standalone_app.xml')
+          if not os.path.exists(layout_path) or os.path.getsize(layout_path) == 0:
+              default_xml = (
+                  '<?xml version="1.0" encoding="utf-8"?>\n'
+                  '<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"\n'
+                  '    android:layout_width="match_parent"\n'
+                  '    android:layout_height="match_parent"\n'
+                  '    android:background="#000000">\n'
+                  '    <WebView android:id="@+id/standaloneWebView" android:layout_width="match_parent" android:layout_height="match_parent" />\n'
+                  '    <ProgressBar android:id="@+id/standaloneProgress" style="?android:attr/progressBarStyleHorizontal" android:layout_width="match_parent" android:layout_height="3dp" android:layout_gravity="top" android:indeterminate="false" android:progressTint="#4FC3F7" android:visibility="gone" />\n'
+                  '    <LinearLayout android:id="@+id/splashContainer" android:layout_width="match_parent" android:layout_height="match_parent" android:orientation="vertical" android:gravity="center" android:background="#1E1E1E">\n'
+                  '        <ImageView android:id="@+id/splashLogo" android:layout_width="100dp" android:layout_height="100dp" android:src="@mipmap/ic_launcher" android:contentDescription="App Logo" />\n'
+                  '        <TextView android:id="@+id/splashTitle" android:layout_width="wrap_content" android:layout_height="wrap_content" android:layout_marginTop="16dp" android:text="@string/app_name" android:textColor="#FFFFFF" android:textSize="18sp" android:textStyle="bold" />\n'
+                  '    </LinearLayout>\n'
+                  '</FrameLayout>\n'
+              )
+              with open(layout_path, 'w', encoding='utf-8') as lf:
+                  lf.write(default_xml)
+              print('Generated default activity_standalone_app.xml')
+
+          # Apply splash screen customization
           if os.path.exists(layout_path):
               with open(layout_path, 'r', encoding='utf-8') as f:
                   layout = f.read()
               if splash_color.upper() == '#FFFFFF':
                   layout = layout.replace('android:background="#1E1E1E"', 'android:background="#FFFFFF"')
                   layout = layout.replace('android:textColor="@color/white"', 'android:textColor="#111111"')
+                  layout = layout.replace('android:textColor="#FFFFFF"', 'android:textColor="#111111"')
               with open(layout_path, 'w', encoding='utf-8') as f:
                   f.write(layout)
-              print('Configured splash screen theme')
+              print('Configured splash screen theme in layout')
+
+          # Also heal StandaloneAppActivity.kt against any missing R.layout or R.id references
+          standalone_kt = 'app/src/main/java/com/example/htmleditor/StandaloneAppActivity.kt'
+          if os.path.exists(standalone_kt):
+              with open(standalone_kt, 'r', encoding='utf-8') as skf:
+                  s_code = skf.read()
+              if 'R.layout.activity_standalone_app' in s_code or 'R.id.standaloneWebView' in s_code:
+                  s_code = s_code.replace(
+                      'setContentView(R.layout.activity_standalone_app)',
+                      'val lRes = resources.getIdentifier("activity_standalone_app", "layout", packageName)\n        if (lRes != 0) setContentView(lRes)'
+                  )
+                  s_code = s_code.replace(
+                      'webView = findViewById(R.id.standaloneWebView)',
+                      'val wId = resources.getIdentifier("standaloneWebView", "id", packageName)\n        webView = if (wId != 0) findViewById(wId) else android.webkit.WebView(this)'
+                  )
+                  s_code = s_code.replace(
+                      'splashContainer = findViewById(R.id.splashContainer)',
+                      'val sId = resources.getIdentifier("splashContainer", "id", packageName)\n        splashContainer = if (sId != 0) findViewById(sId) else android.widget.LinearLayout(this)'
+                  )
+                  s_code = s_code.replace(
+                      'progressBar = findViewById(R.id.standaloneProgress)',
+                      'val pId = resources.getIdentifier("standaloneProgress", "id", packageName)\n        progressBar = if (pId != 0) findViewById(pId) else android.widget.ProgressBar(this)'
+                  )
+                  with open(standalone_kt, 'w', encoding='utf-8') as skf:
+                      skf.write(s_code)
+                  print('Self-healed StandaloneAppActivity.kt against unresolved R references')
 
           # 8. Export fingerprint to GITHUB_ENV
           if 'GITHUB_ENV' in os.environ and fingerprint:
