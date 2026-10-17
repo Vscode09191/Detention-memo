@@ -75,6 +75,9 @@ jobs:
           import base64
           import os
           import re
+          import shutil
+          import io
+          import zipfile
 
           # 1. Read Payload
           payload_path = 'build_payload/payload.json'
